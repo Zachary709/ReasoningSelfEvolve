@@ -16,17 +16,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from src.config import (
-    DEFAULT_DATASET_PATH,
+from src.utils.config import (
     DEFAULT_MODEL_PATH,
     DEFAULT_VLLM_BASE_URL,
     parse_run_config,
 )
-from src.data_loader import ProblemRecord, load_problem
-from src.llm_client import LocalLLM
-from src.logging_utils import configure_logging
-from src.prompts import PromptBuilder
-from src.solver_engine import SelfEvolvingSolver
+from src.utils.data_loader import ProblemRecord, load_problem
+from src.utils.logging_utils import configure_logging
+from src.llm.llm_client import LocalLLM
+from src.prompts.prompts import PromptBuilder
+from src.solver.solver_engine import SelfEvolvingSolver
 
 
 def _resolve_log_path(config: Dict[str, object]) -> str | None:
@@ -40,7 +39,12 @@ def _resolve_log_path(config: Dict[str, object]) -> str | None:
 
 
 def build_solver(config: Dict[str, object]) -> Tuple[SelfEvolvingSolver, ProblemRecord, int]:
-    dataset_path = Path(config.get("dataset", DEFAULT_DATASET_PATH))
+    questions_dir_raw = config.get("questions_dir")
+    if questions_dir_raw is None:
+        questions_dir = PROJECT_ROOT / "questions"
+    else:
+        questions_dir = Path(questions_dir_raw)
+    questions_file = str(config.get("questions_file", "aime2024_questions.txt"))
     model_path = str(config.get("model", DEFAULT_MODEL_PATH))
     api_base = str(config.get("api_base", DEFAULT_VLLM_BASE_URL))
     problem_id = config.get("problem_id")
@@ -48,17 +52,27 @@ def build_solver(config: Dict[str, object]) -> Tuple[SelfEvolvingSolver, Problem
     log_path_str = _resolve_log_path(config)
     dry_run = bool(config.get("dry_run", False))
     max_new_tokens = int(config.get("max_new_tokens", 4096))
+    max_context_length = int(config.get("max_context_length", 30000))
+    verification_max_new_tokens = config.get("verification_max_new_tokens")
+    if verification_max_new_tokens is not None:
+        verification_max_new_tokens = int(verification_max_new_tokens)
 
     logger = configure_logging(log_path_str)
 
-    record = load_problem(dataset_path, problem_id)
+    record = load_problem(questions_dir, problem_id, questions_file)
     llm = LocalLLM(
         model_path=model_path,
         api_base=api_base,
         max_new_tokens=max_new_tokens,
+        max_context_length=max_context_length,
         dry_run=dry_run,
     )
-    solver = SelfEvolvingSolver(llm=llm, prompt_builder=PromptBuilder(), logger=logger)
+    solver = SelfEvolvingSolver(
+        llm=llm, 
+        prompt_builder=PromptBuilder(), 
+        logger=logger,
+        verification_max_new_tokens=verification_max_new_tokens
+    )
     return solver, record, rounds
 
 

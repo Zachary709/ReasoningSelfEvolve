@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import json
+import yaml
 from pathlib import Path
 from typing import Any, Dict
 
-DEFAULT_CONFIG_PATH = Path("/home/zhangdw/ReasoningSelfEvolve/config/solver_config.json")
+DEFAULT_CONFIG_PATH = Path("/home/zhangdw/ReasoningSelfEvolve/config/solver_config.yaml")
 DEFAULT_DATASET_PATH = Path(
     "/home/zhangdw/ReasoningSelfEvolve/data/AIME_2024/aime_2024_problems.parquet"
 )
@@ -17,7 +17,7 @@ def load_config(config_path: Path) -> Dict[str, Any]:
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found at {config_path}")
     with config_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        return yaml.safe_load(f)
 
 
 def parse_run_config() -> Dict[str, Any]:
@@ -26,7 +26,7 @@ def parse_run_config() -> Dict[str, Any]:
         "--config",
         type=Path,
         default=DEFAULT_CONFIG_PATH,
-        help=f"Path to JSON config file (default: {DEFAULT_CONFIG_PATH}).",
+        help=f"Path to YAML config file (default: {DEFAULT_CONFIG_PATH}).",
     )
     args = parser.parse_args()
     return load_config(args.config)

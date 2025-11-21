@@ -1,0 +1,12 @@
+questions_dir: /home/zhangdw/ReasoningSelfEvolve/questions
+questions_file: aime2024_questions.txt
+problem_id: 2030-I-1 # 2024-I-8
+model: /home/zhangdw/models/DeepSeek/DeepSeek-R1-0528-Qwen3-8B
+api_base: http://0.0.0.0:8000
+rounds: 1
+max_new_tokens: 1024 # 20000
+max_context_length: 4096 # 60000
+verification_max_new_tokens: 512
+output: /home/zhangdw/ReasoningSelfEvolve/outputs/latest_run.json
+dry_run: false
+
