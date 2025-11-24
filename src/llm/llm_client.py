@@ -4,7 +4,7 @@ import logging
 import re
 from typing import Optional
 
-import requests
+from openai import OpenAI
 from transformers import AutoTokenizer
 
 from src.utils.config import DEFAULT_VLLM_BASE_URL
@@ -21,6 +21,7 @@ class LocalLLM:
         self,
         model_path: str,
         api_base: str = DEFAULT_VLLM_BASE_URL,
+        api_key: Optional[str] = None,
         max_new_tokens: int = 4096,
         max_context_length: int = 30000,
         temperature: float = 0.15,
@@ -30,6 +31,7 @@ class LocalLLM:
     ) -> None:
         self.model_path = model_path
         self.api_base = api_base.rstrip("/")
+        self.api_key = api_key or "EMPTY"
         self.max_new_tokens = max_new_tokens
         self.max_context_length = max_context_length
         self.temperature = temperature
@@ -37,6 +39,10 @@ class LocalLLM:
         self.dry_run = dry_run
         self.request_timeout = request_timeout
         self._tokenizer: Optional[AutoTokenizer] = None
+        self._client = OpenAI(
+            base_url=f"{self.api_base}/v1",
+            api_key=self.api_key,
+        )
 
     def _get_tokenizer(self) -> AutoTokenizer:
         """Lazy load tokenizer to avoid loading it if not needed."""
@@ -152,72 +158,50 @@ class LocalLLM:
                 f"limiting response to {effective_max_new_tokens} tokens"
             )
 
-        url = f"{self.api_base}/v1/completions"
-        payload = {
-            "model": self.model_path,
-            "prompt": prompt,
-            "max_tokens": effective_max_new_tokens,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-        }
-        
-        # Add stop tokens if provided
-        if stop is not None:
-            payload["stop"] = stop
+        client = (
+            self._client.with_options(timeout=self.request_timeout)
+            if self.request_timeout is not None
+            else self._client
+        )
+        messages = [{"role": "user", "content": prompt}]
         try:
-            response = requests.post(url, json=payload, timeout=self.request_timeout)
-            response.raise_for_status()
-            data = response.json()
-        except requests.RequestException as exc:
-            raise RuntimeError(f"[LLM] Failed to call vLLM endpoint: {exc}") from exc
+            response = client.chat.completions.create(
+                model=self.model_path,
+                messages=messages,
+                max_tokens=effective_max_new_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                # extra_body={"enable_thinking": False},
+                stop=stop,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"[LLM] Failed to call OpenAI client: {exc}") from exc
 
-        choices = data.get("choices")
+        choices = response.choices
         if not choices:
-            raise RuntimeError(f"[LLM] vLLM endpoint returned no choices: {data}")
+            raise RuntimeError("[LLM] OpenAI client returned no choices.")
 
-        text = choices[0].get("text") or choices[0].get("message", {}).get("content")
+        text = getattr(choices[0], "text", None) or getattr(
+            getattr(choices[0], "message", None), "content", None
+        )
         if text is None:
-            raise RuntimeError(f"[LLM] Unable to parse generation result: {data}")
+            raise RuntimeError("[LLM] Unable to parse generation result.")
         
         # Handle empty response
         text = text.strip()
         if not text:
             logger.warning(
                 f"[LLM] Received empty response from model. "
-                f"Finish reason: {choices[0].get('finish_reason')}, "
-                f"Usage: {data.get('usage', {})}"
+                f"Finish reason: {getattr(choices[0], 'finish_reason', None)}, "
+                f"Usage: {getattr(response, 'usage', {})}"
             )
             # Return a placeholder message instead of raising an error
             return "[Empty response from model]"
         
-        # For verification calls (when max_new_tokens_override is set), truncate output after verdict
-        # Strategy: Find the first occurrence of \boxed{0} or \boxed{1} and keep everything
-        # up to and including the verdict, then truncate everything after it
-        # This ensures the verdict is always preserved even if model continues generating
-        if max_new_tokens_override is not None:
-            # Check if output contains \boxed{0} or \boxed{1}
-            verdict_match = re.search(r"\\boxed\{([01])\}", text)
-            if verdict_match:
-                # Find the start and end positions of the verdict
-                verdict_start = verdict_match.start()
-                verdict_end = verdict_match.end()
-                
-                # Find the start of the line containing the verdict
-                line_start = text.rfind("\n", 0, verdict_start)
-                if line_start == -1:
-                    line_start = 0
-                else:
-                    line_start += 1  # Include the newline character
-                
-                # Find the end of the line containing the verdict
-                line_end = text.find("\n", verdict_end)
-                if line_end != -1:
-                    # Keep everything up to and including the line with verdict
-                    text = text[:line_end].strip()
-                else:
-                    # No newline after verdict, keep everything up to and including verdict
-                    text = text[:verdict_end].strip()
-            # If no verdict found, keep the full output (don't truncate)
-        
+        # output usage
+        usage = response.usage
+        logger.info(f"[LLM] Usage: {usage}")
+        # print(f"[LLM] Usage: {usage}")
+
         return text
 
