@@ -53,6 +53,8 @@ def build_solver(config: Dict[str, object]) -> Tuple[SelfEvolvingSolver, Problem
     dry_run = bool(config.get("dry_run", False))
     max_new_tokens = int(config.get("max_new_tokens", 4096))
     max_context_length = int(config.get("max_context_length", 30000))
+    temperature = float(config.get("temperature", 0.15))
+    top_p = float(config.get("top_p", 0.9))
     verification_max_new_tokens = config.get("verification_max_new_tokens")
     if verification_max_new_tokens is not None:
         verification_max_new_tokens = int(verification_max_new_tokens)
@@ -65,6 +67,8 @@ def build_solver(config: Dict[str, object]) -> Tuple[SelfEvolvingSolver, Problem
         api_base=api_base,
         max_new_tokens=max_new_tokens,
         max_context_length=max_context_length,
+        temperature=temperature,
+        top_p=top_p,
         dry_run=dry_run,
     )
     solver = SelfEvolvingSolver(

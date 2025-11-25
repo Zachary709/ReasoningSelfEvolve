@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
+from typing import Dict, List, Optional, Sequence, Union
 
 from openai import OpenAI
 from transformers import AutoTokenizer
@@ -111,17 +111,36 @@ class LocalLLM:
         truncated_prompt += truncation_note
         return truncated_prompt
 
+    def _messages_to_text(self, messages: Sequence[Dict[str, str]]) -> str:
+        """Flatten chat messages into text for approximate token counting."""
+        parts = []
+        for message in messages:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+            parts.append(f"{role.upper()}:\n{content}")
+        return "\n\n".join(parts)
+
     def generate(
-        self, 
-        prompt: str, 
+        self,
+        prompt: Union[str, Sequence[Dict[str, str]]],
         stop: Optional[list[str]] = None,
-        max_new_tokens_override: Optional[int] = None
+        max_new_tokens_override: Optional[int] = None,
     ) -> str:
         if self.dry_run:
-            return f"[DRY-RUN OUTPUT] Prompt preview: {prompt[:200]}..."
+            preview_text = (
+                prompt if isinstance(prompt, str) else self._messages_to_text(prompt)
+            )
+            return f"[DRY-RUN OUTPUT] Prompt preview: {preview_text[:200]}..."
+
+        if isinstance(prompt, str):
+            messages: List[Dict[str, str]] = [{"role": "user", "content": prompt}]
+            prompt_for_count = prompt
+        else:
+            messages = list(prompt)
+            prompt_for_count = self._messages_to_text(messages)
 
         # Calculate prompt token count
-        input_token_count = self._count_tokens(prompt)
+        input_token_count = self._count_tokens(prompt_for_count)
         
         # Calculate maximum input tokens
         # Strategy: prioritize input tokens, then allocate remaining space for output
@@ -133,14 +152,24 @@ class LocalLLM:
         max_input_tokens = self.max_context_length - min_output_tokens - buffer_tokens
         
         # Truncate prompt if necessary
-        if input_token_count > max_input_tokens:
-            original_count = input_token_count
-            prompt = self._truncate_prompt(prompt, max_input_tokens)
-            input_token_count = self._count_tokens(prompt)
-            logger.warning(
-                f"Prompt truncated from {original_count} to {input_token_count} tokens "
-                f"(max context length: {self.max_context_length})"
-            )
+        if isinstance(prompt, str):
+            if input_token_count > max_input_tokens:
+                original_count = input_token_count
+                prompt = self._truncate_prompt(prompt, max_input_tokens)
+                messages = [{"role": "user", "content": prompt}]
+                prompt_for_count = prompt
+                input_token_count = self._count_tokens(prompt_for_count)
+                logger.warning(
+                    f"Prompt truncated from {original_count} to {input_token_count} tokens "
+                    f"(max context length: {self.max_context_length})"
+                )
+        else:
+            if input_token_count > max_input_tokens:
+                logger.warning(
+                    "Prompt messages exceed max input tokens "
+                    f"({input_token_count} > {max_input_tokens}). "
+                    "No automatic truncation applied for multi-message prompts."
+                )
 
         # Use override if provided, otherwise use default
         max_new_tokens_to_use = max_new_tokens_override if max_new_tokens_override is not None else self.max_new_tokens
@@ -163,7 +192,6 @@ class LocalLLM:
             if self.request_timeout is not None
             else self._client
         )
-        messages = [{"role": "user", "content": prompt}]
         try:
             response = client.chat.completions.create(
                 model=self.model_path,
