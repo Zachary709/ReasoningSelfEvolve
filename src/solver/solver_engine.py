@@ -45,33 +45,54 @@ class SelfEvolvingSolver:
             }
         )
 
-        self._log(self._divider("Initial Verification"))
-        self._log("Running initial verification...")
-        verification_prompt = self.prompts.verification(record.prompt, solution_body)
-        # Don't use stop tokens - rely on post-processing to truncate after verdict
-        # This ensures the verdict (\boxed{0} or \boxed{1}) is always included in output
-        verification_text = self.llm.generate(
-            verification_prompt,
-            stop=None,  # No stop tokens - post-processing will handle truncation
-            max_new_tokens_override=self.verification_max_new_tokens
-        )
-        self._log("Initial verification LLM output:\n%s", verification_text)
-        history.append(
-            {"role": "verification", "prompt": verification_prompt, "response": verification_text}
-        )
+        # self._log(self._divider("Initial Verification"))
+        # self._log("Running initial verification...")
+        # verification_prompt = self.prompts.verification(record.prompt, solution_body)
+        # # Don't use stop tokens - rely on post-processing to truncate after verdict
+        # # This ensures the verdict (\boxed{0} or \boxed{1}) is always included in output
+        # verification_text = self.llm.generate(
+        #     verification_prompt,
+        #     stop=None,  # No stop tokens - post-processing will handle truncation
+        #     max_new_tokens_override=self.verification_max_new_tokens
+        # )
+        # self._log("Initial verification LLM output:\n%s", verification_text)
+        # history.append(
+        #     {"role": "verification", "prompt": verification_prompt, "response": verification_text}
+        # )
 
-        verdict = self._extract_verdict(verification_text)
-        self._log(f"Initial verification verdict: {verdict}")
+        # verdict = self._extract_verdict(verification_text)
+        # self._log(f"Initial verification verdict: {verdict}")
 
-        for round_idx in range(2, rounds + 1):
-            if verdict == 1:
-                break
+        verification_text = ""
+
+        for round_idx in range(1, rounds + 1):
+            # if verdict == 1:
+            #     break
             epoch_label = f"epoch {round_idx}/{rounds}"
             self._log(self._divider(f"Refinement {epoch_label}"))
             self._log(f"Refining solution...")
-            refinement_prompt = self.prompts.refinement(
-                record.prompt, solution_body, verification_text
-            )
+            
+            if verification_text == "":
+                refinement_prompt = self.prompts.refinement(
+                    record.prompt, solution_body
+                )
+            else:
+                refinement_prompt = self.prompts.refinement(
+                    record.prompt, verification_text
+                )
+                refinement_prompt[1]["content"] = """
+                    You have an opportunity to improve your last solution. Please review the verification of your previous solution carefully. Correct errors and fill justification gaps if any. Your second round of output should strictly follow the instructions in the system prompt.
+
+                    ### Problem ###
+
+                    {problem}
+
+                    ### Verification of Your Previous Solution ###
+
+                    {solution}
+                """
+            # self._log(f"Refinement prompt:\n%s", refinement_prompt)
+            
             solution_text = self.llm.generate(refinement_prompt)
             solution_body = self._extract_section(solution_text, "solution") or solution_text
             self._log(f"Solution LLM output:\n%s", solution_text)
@@ -95,6 +116,12 @@ class SelfEvolvingSolver:
                 stop=None,  # No stop tokens - post-processing will handle truncation
                 max_new_tokens_override=self.verification_max_new_tokens
             )
+
+            think_end = verification_text.find("</think>")
+            if think_end != -1:
+                verification_text = verification_text[think_end + len("</think>"):]
+
+
             self._log(f"Verification LLM output:\n%s", verification_text)
             history.append(
                 {
@@ -105,6 +132,9 @@ class SelfEvolvingSolver:
             )
             verdict = self._extract_verdict(verification_text)
             self._log(f"Verification verdict: {verdict}")
+
+            
+            
 
         final_answer = self._extract_boxed_answer(solution_body)
         self._log(self._divider("Final Verdict"))
