@@ -4,104 +4,6 @@ from typing import Dict, List
 
 Message = Dict[str, str]
 
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~My prompts~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# PROMPT_SOLUTION_SYSTEM = (
-#     '''You are an IMO Mathematics Competition contestant. There will be a problem for you to solve.
-#     1. Think step by step before answering. 
-#     2. Ensure your final answer is strictly in the format: \\boxed{{...}}.'''
-# )
-
-# PROMPT_SOLUTION_USER = """
-# Problem:
-# {problem}
-
-# Now, please solve the problem and give your answer in the format: \\boxed{{...}}.
-# """
-
-# PROMPT_VERIFICATION_SYSTEM = (
-#     '''You are a judge for the IMO Mathematics Competition. There will be an answer given by the contestant for you to evaluate.
-#     1. The answer may be incomplete, in which case please focus on each step rather than the missing parts.
-#     2. Check line by line whether there are any issues with the answer given by the contestant. 
-#     3. If there are any issues, explain the reasons for the issues, and indicate the optimization direction. 
-#     4. If the answer is trustworthy, state clearly that the answer is trustworthy.'''
-# )
-
-# PROMPT_VERIFICATION_USER = """
-# Problem:
-# {problem}
-
-# Answer given by the contestant:
-# {solution}
-
-# Now, please examine the answer given by the contestant and give your comments."""
-
-# PROMPT_REFINEMENT_SYSTEM = (
-#     '''You are an IMO Mathematics Competition contestant. There will be a problem for you to solve and a previous anwser with the judge's feedback for you to revise.
-#     1. Think step by step before answering. 
-#     2. Given your previous anwser and the judge's feedback, re-solve the problem carefully from scratch. 
-#     3. Address every issue raised, confirm each derivation, and only present an anwser you have fully justified. 
-#     4. Ensure your final anwser is strictly in the format: \\boxed{{...}}.'''
-# )
-
-# PROMPT_REFINEMENT_USER = """
-# Problem:
-# {problem}
-
-# Previous anwser:
-# {solution}
-
-# Judge's feedback:
-# {verification}
-
-# Now, please give your new anwser."""
-
-
-
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Paper's prompts~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-# PROMPT_SOLUTION_SYSTEM = (
-#     '''You are an IMO Mathematics Competition contestant. There will be a problem for you to solve.
-#     1. Think step by step before answering. 
-#     2. Ensure your final answer is strictly in the format: \\boxed{{...}}.'''
-# )
-
-# PROMPT_SOLUTION_USER = """
-# Problem:
-# {problem}
-
-# Now, please solve the problem and give your answer in the format: \\boxed{{...}}.
-# """
-
-# PROMPT_VERIFICATION_SYSTEM = (
-#     '''Verify the given solution step by step to check correctness. Provide a short verification report, containing the key points of the solution and any errors found. Finally, put your judgement strictly in the format: \boxed{1} if correct, or \boxed{0} if incorrect.'''
-# )
-
-# PROMPT_VERIFICATION_USER = """
-# Problem:
-# {problem}
-
-# Solution:
-# {solution}
-# """
-
-# PROMPT_REFINEMENT_SYSTEM = (
-#     '''Given your previous solution and verification report, reconsider the problem carefully and provide a corrected solution. Output your final answer strictly in the format: \\boxed{}.'''
-# )
-
-# PROMPT_REFINEMENT_USER = """
-# Problem:
-# {problem}
-
-# Previous solution:
-# {solution}
-# """
-
-
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~the Other's prompts~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 PROMPT_SOLUTION_SYSTEM = '''
 ### Core Instructions ###
 
@@ -212,7 +114,7 @@ Your task is to act as an IMO grader. Now, generate the **summary** and the **st
 
 PROMPT_REFINEMENT_SYSTEM = PROMPT_SOLUTION_SYSTEM
 
-PROMPT_REFINEMENT_USER = """
+PROMPT_REFINEMENT_USER_RESOLVE = """
 You have an opportunity to improve your solution. Please review your solution carefully. Correct errors and fill justification gaps if any. Your second round of output should strictly follow the instructions in the system prompt.
 
 ### Problem ###
@@ -222,6 +124,22 @@ You have an opportunity to improve your solution. Please review your solution ca
 ### Previous Solution ###
 
 {solution}
+"""
+
+PROMPT_REFINEMENT_USER_IMPROVE = """
+You have an opportunity to improve your last solution. Please review your previous solution and the verification of it carefully. Correct errors and fill justification gaps if any. Your second round of output should strictly follow the instructions in the system prompt.
+
+### Problem ###
+
+{problem}
+
+### Previous Solution ###
+
+{solution}
+
+### Verification of Your Previous Solution ###
+
+{verification}
 """
 
 class PromptBuilder:
@@ -244,13 +162,23 @@ class PromptBuilder:
             PROMPT_VERIFICATION_USER.format(problem=problem, solution=solution),
         )
 
-    def refinement(
+    def refinement_resolve(
         self, problem: str, solution: str
     ) -> List[Message]:
         return self._build_messages(
             PROMPT_REFINEMENT_SYSTEM,
-            PROMPT_REFINEMENT_USER.format(
+            PROMPT_REFINEMENT_USER_RESOLVE.format(
                 problem=problem, solution=solution
+            ),
+        )
+
+    def refinement_improve(
+        self, problem: str, solution: str, verification: str
+    ) -> List[Message]:
+        return self._build_messages(
+            PROMPT_REFINEMENT_SYSTEM,
+            PROMPT_REFINEMENT_USER_IMPROVE.format(
+                problem=problem, solution=solution, verification=verification
             ),
         )
 

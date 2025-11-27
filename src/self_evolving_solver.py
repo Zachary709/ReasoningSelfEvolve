@@ -56,6 +56,7 @@ def build_solver(config: Dict[str, object]) -> Tuple[SelfEvolvingSolver, Problem
     temperature = float(config.get("temperature", 0.15))
     top_p = float(config.get("top_p", 0.9))
     verification_max_new_tokens = config.get("verification_max_new_tokens")
+    max_report_tokens = int(config.get("max_report_tokens", 10000))
     if verification_max_new_tokens is not None:
         verification_max_new_tokens = int(verification_max_new_tokens)
 
@@ -75,7 +76,9 @@ def build_solver(config: Dict[str, object]) -> Tuple[SelfEvolvingSolver, Problem
         llm=llm, 
         prompt_builder=PromptBuilder(), 
         logger=logger,
-        verification_max_new_tokens=verification_max_new_tokens
+        max_new_tokens=max_new_tokens,
+        verification_max_new_tokens=verification_max_new_tokens,
+        max_report_tokens=max_report_tokens
     )
     return solver, record, rounds
 

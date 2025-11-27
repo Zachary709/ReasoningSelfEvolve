@@ -15,12 +15,16 @@ class SelfEvolvingSolver:
         llm: LocalLLM,
         prompt_builder: PromptBuilder,
         logger: Optional[logging.Logger] = None,
+        max_new_tokens: int = 4096,
         verification_max_new_tokens: Optional[int] = None,
+        max_report_tokens: int = 10000,
     ) -> None:
         self.llm = llm
         self.prompts = prompt_builder
         self.logger = logger or logging.getLogger(__name__)
+        self.max_new_tokens = max_new_tokens
         self.verification_max_new_tokens = verification_max_new_tokens
+        self.max_report_tokens = max_report_tokens
 
     def solve(self, record: ProblemRecord, rounds: int = 2) -> Dict[str, Any]:
         history = []
@@ -33,9 +37,14 @@ class SelfEvolvingSolver:
         solution_prompt = self.prompts.solution(record.prompt)
         self._log(self._divider("Initial Solution"))
         self._log("Generating initial solution...")
-        solution_text = self.llm.generate(solution_prompt)
-        solution_body = self._extract_section(solution_text, "solution") or solution_text
-        self._log("Initial solution LLM output:\n%s", solution_text)
+        while True:
+            solution_text = self.llm.generate(solution_prompt, max_new_tokens_override=self.max_new_tokens + 2 * self.max_report_tokens)
+            solution_body = self._extract_report(solution_text)
+            if len(solution_body) <= self.max_report_tokens:
+                break
+            self._log(self._divider("Solution Truncated, will try again..."))
+        
+        self._log("Initial solution LLM output:\n%s", solution_body)
         history.append(
             {
                 "role": "solution",
@@ -45,25 +54,7 @@ class SelfEvolvingSolver:
             }
         )
 
-        # self._log(self._divider("Initial Verification"))
-        # self._log("Running initial verification...")
-        # verification_prompt = self.prompts.verification(record.prompt, solution_body)
-        # # Don't use stop tokens - rely on post-processing to truncate after verdict
-        # # This ensures the verdict (\boxed{0} or \boxed{1}) is always included in output
-        # verification_text = self.llm.generate(
-        #     verification_prompt,
-        #     stop=None,  # No stop tokens - post-processing will handle truncation
-        #     max_new_tokens_override=self.verification_max_new_tokens
-        # )
-        # self._log("Initial verification LLM output:\n%s", verification_text)
-        # history.append(
-        #     {"role": "verification", "prompt": verification_prompt, "response": verification_text}
-        # )
-
-        # verdict = self._extract_verdict(verification_text)
-        # self._log(f"Initial verification verdict: {verdict}")
-
-        verification_text = ""
+        verification_body = ""
 
         for round_idx in range(1, rounds + 1):
             # if verdict == 1:
@@ -72,30 +63,24 @@ class SelfEvolvingSolver:
             self._log(self._divider(f"Refinement {epoch_label}"))
             self._log(f"Refining solution...")
             
-            if verification_text == "":
-                refinement_prompt = self.prompts.refinement(
-                    record.prompt, solution_body
-                )
+            
+            if verification_body != "":
+                refinement_prompt = self.prompts.refinement_improve(record.prompt, solution_body, verification_text)
             else:
-                refinement_prompt = self.prompts.refinement(
-                    record.prompt, verification_text
-                )
-                refinement_prompt[1]["content"] = """
-                    You have an opportunity to improve your last solution. Please review the verification of your previous solution carefully. Correct errors and fill justification gaps if any. Your second round of output should strictly follow the instructions in the system prompt.
-
-                    ### Problem ###
-
-                    {problem}
-
-                    ### Verification of Your Previous Solution ###
-
-                    {solution}
-                """
+                refinement_prompt = self.prompts.refinement_resolve(record.prompt, solution_body)
             # self._log(f"Refinement prompt:\n%s", refinement_prompt)
             
-            solution_text = self.llm.generate(refinement_prompt)
-            solution_body = self._extract_section(solution_text, "solution") or solution_text
-            self._log(f"Solution LLM output:\n%s", solution_text)
+            max_refinement_tokens = self.max_new_tokens
+            if verification_body == "":
+                max_refinement_tokens += self.max_report_tokens
+            while True:
+                solution_text = self.llm.generate(refinement_prompt, max_new_tokens_override=max_refinement_tokens)
+                solution_body = self._extract_report(solution_text)
+                if len(solution_body) <= self.max_report_tokens:
+                    break
+                self._log(self._divider("Solution Truncated, will try again..."))
+
+            self._log(f"Solution LLM output:\n%s", solution_body)
             history.append(
                 {
                     "role": f"solution_round_{round_idx}",
@@ -111,26 +96,26 @@ class SelfEvolvingSolver:
             verification_prompt = self.prompts.verification(record.prompt, solution_body)
             # Don't use stop tokens - rely on post-processing to truncate after verdict
             # This ensures the verdict (\boxed{0} or \boxed{1}) is always included in output
-            verification_text = self.llm.generate(
-                verification_prompt,
-                stop=None,  # No stop tokens - post-processing will handle truncation
-                max_new_tokens_override=self.verification_max_new_tokens
-            )
+            while True:
+                verification_text = self.llm.generate(
+                    verification_prompt,
+                    max_new_tokens_override=self.verification_max_new_tokens
+                )
+                verification_body = self._extract_report(verification_text)
+                if len(verification_body) <= self.max_report_tokens:
+                    break
+                self._log(self._divider("Verification Truncated, will try again..."))
 
-            think_end = verification_text.find("</think>")
-            if think_end != -1:
-                verification_text = verification_text[think_end + len("</think>"):]
-
-
-            self._log(f"Verification LLM output:\n%s", verification_text)
+            self._log(f"Verification LLM output:\n%s", verification_body)
             history.append(
                 {
                     "role": f"verification_round_{round_idx}",
                     "prompt": verification_prompt,
                     "response": verification_text,
+                    "verification_body": verification_body,
                 }
             )
-            verdict = self._extract_verdict(verification_text)
+            verdict = self._extract_verdict(verification_body)
             self._log(f"Verification verdict: {verdict}")
 
             
@@ -171,6 +156,13 @@ class SelfEvolvingSolver:
         if match:
             return match.group(1).strip()
         return None
+
+    @staticmethod
+    def _extract_report(text: str) -> Optional[str]:
+        end_idx = text.find("</think>")
+        if end_idx != -1:
+            return text[end_idx + len("</think>"):].strip()
+        return text
 
     def _log(self, message: str, *args: Any) -> None:
         if self.logger:
