@@ -90,6 +90,9 @@ class SelfEvolvingSolver:
                 }
             )
 
+            if round_idx == rounds:
+                break
+
             # ~~~~~~~~~~~~~~~~~~~~~~~~~ Verification ~~~~~~~~~~~~~~~~~~~~~~~~~
             self._log(self._divider(f"Verification {epoch_label}"))
             self._log(f"Verifying solution...")

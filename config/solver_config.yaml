@@ -12,6 +12,6 @@ temperature: 0.1
 top_p: 1.0
 verification_max_new_tokens: 25000
 max_report_tokens: 5000
-output: /home/zhangdw/ReasoningSelfEvolve/outputs/latest_run.json
+output: /home/zhangdw/ReasoningSelfEvolve/outputs/latest_run.log
 dry_run: false
 
