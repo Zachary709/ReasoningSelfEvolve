@@ -7,9 +7,9 @@ from typing import Any, Dict
 
 DEFAULT_CONFIG_PATH = Path("/home/zhangdw/ReasoningSelfEvolve/config/solver_config.yaml")
 DEFAULT_DATASET_PATH = Path(
-    "/home/zhangdw/ReasoningSelfEvolve/data/AIME_2024/aime_2024_problems.parquet"
+    "/home/zhangdw/ReasoningSelfEvolve/questions/aime2024_questions.txt"
 )
-DEFAULT_MODEL_PATH = "/home/zhangdw/models/DeepSeek/DeepSeek-R1-0528-Qwen3-8B"
+DEFAULT_MODEL_PATH = "/home/zhangdw/models/Qwen/Qwen3-8B"
 DEFAULT_VLLM_BASE_URL = "http://0.0.0.0:8000"
 
 
