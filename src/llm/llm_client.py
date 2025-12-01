@@ -28,6 +28,7 @@ class LocalLLM:
         top_p: float = 0.9,
         dry_run: bool = False,
         request_timeout: Optional[float] = None,
+        enable_thinking: bool = True,
     ) -> None:
         self.model_path = model_path
         self.api_base = api_base.rstrip("/")
@@ -43,13 +44,17 @@ class LocalLLM:
             base_url=f"{self.api_base}/v1",
             api_key=self.api_key,
         )
+        self.enable_thinking = enable_thinking
 
     def _get_tokenizer(self) -> AutoTokenizer:
         """Lazy load tokenizer to avoid loading it if not needed."""
         if self._tokenizer is None:
             try:
                 self._tokenizer = AutoTokenizer.from_pretrained(
-                    self.model_path, trust_remote_code=True
+                    self.model_path, 
+                    torch_dtype="auto",
+                    device_map="auto",
+                    trust_remote_code=True
                 )
             except Exception as e:
                 logger.warning(
@@ -113,12 +118,14 @@ class LocalLLM:
 
     def _messages_to_text(self, messages: Sequence[Dict[str, str]]) -> str:
         """Flatten chat messages into text for approximate token counting."""
-        parts = []
-        for message in messages:
-            role = message.get("role", "user")
-            content = message.get("content", "")
-            parts.append(f"{role.upper()}:\n{content}")
-        return "\n\n".join(parts)
+        tokenizer = self._get_tokenizer()
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=self.enable_thinking # Switches between thinking and non-thinking modes. Default is True.
+        )
+        return text
 
     def generate(
         self,

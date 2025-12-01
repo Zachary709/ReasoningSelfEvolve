@@ -56,7 +56,7 @@ def load_all_problems(
     
     # 使用 load_problem 加载每个问题
     problems = []
-    for problem_id in sorted(problem_ids):
+    for problem_id in problem_ids:
         record = load_problem(questions_dir, problem_id, questions_file)
         problems.append(record)
     
@@ -151,8 +151,13 @@ def test_self_evolving_solver(
     print("\n开始测试...")
     print("=" * 80)
     
+    flag = False
     for idx, record in enumerate(problems, 1):
         problem_id = record.problem_id
+        if problem_id != "2024-II-14" and not flag:
+            print(f"跳过问题 {problem_id}")
+            continue
+        flag = True
         problem_text = record.prompt
         ground_truth = record.answer
         
@@ -302,7 +307,7 @@ def main():
     parser.add_argument(
         "--verification_max_new_tokens",
         type=int,
-        default=25000,
+        default=5000,
         help="验证阶段最大生成token数",
     )
     parser.add_argument(

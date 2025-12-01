@@ -53,7 +53,7 @@ def load_all_problems(
     
     # 使用 load_problem 加载每个问题
     problems = []
-    for problem_id in sorted(problem_ids):
+    for problem_id in problem_ids:
         record = load_problem(questions_dir, problem_id, questions_file)
         problems.append(record)
     
@@ -214,7 +214,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="/home/zhangdw/models/Qwen/Qwen3-8B",
+        default="/home/zhangdw/models/DeepSeek/DeepSeek-R1-0528-Qwen3-8B/",
         help="模型路径",
     )
     parser.add_argument(
