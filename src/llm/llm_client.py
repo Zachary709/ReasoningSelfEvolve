@@ -140,14 +140,13 @@ class LocalLLM:
             return f"[DRY-RUN OUTPUT] Prompt preview: {preview_text[:200]}..."
 
         if isinstance(prompt, str):
-            messages: List[Dict[str, str]] = [{"role": "user", "content": prompt}]
-            prompt_for_count = prompt
+            messages: List[Dict[str, str]] = [{"role": "system", "content": "You are a math problem solver. You are given a math problem and you need to solve it."}, {"role": "user", "content": prompt}]
         else:
             messages = list(prompt)
-            prompt_for_count = self._messages_to_text(messages)
+        prompt = self._messages_to_text(messages)
 
         # Calculate prompt token count
-        input_token_count = self._count_tokens(prompt_for_count)
+        input_token_count = self._count_tokens(prompt)
         
         # Calculate maximum input tokens
         # Strategy: prioritize input tokens, then allocate remaining space for output
@@ -159,24 +158,14 @@ class LocalLLM:
         max_input_tokens = self.max_context_length - min_output_tokens - buffer_tokens
         
         # Truncate prompt if necessary
-        if isinstance(prompt, str):
-            if input_token_count > max_input_tokens:
-                original_count = input_token_count
-                prompt = self._truncate_prompt(prompt, max_input_tokens)
-                messages = [{"role": "user", "content": prompt}]
-                prompt_for_count = prompt
-                input_token_count = self._count_tokens(prompt_for_count)
-                logger.warning(
-                    f"Prompt truncated from {original_count} to {input_token_count} tokens "
-                    f"(max context length: {self.max_context_length})"
-                )
-        else:
-            if input_token_count > max_input_tokens:
-                logger.warning(
-                    "Prompt messages exceed max input tokens "
-                    f"({input_token_count} > {max_input_tokens}). "
-                    "No automatic truncation applied for multi-message prompts."
-                )
+        if input_token_count > max_input_tokens:
+            original_count = input_token_count
+            prompt = self._truncate_prompt(prompt, max_input_tokens)
+            input_token_count = self._count_tokens(prompt)
+            logger.warning(
+                f"Prompt truncated from {original_count} to {input_token_count} tokens "
+                f"(max context length: {self.max_context_length})"
+            )
 
         # Use override if provided, otherwise use default
         max_new_tokens_to_use = max_new_tokens_override if max_new_tokens_override is not None else self.max_new_tokens
@@ -193,6 +182,8 @@ class LocalLLM:
                 f"Prompt is very long ({input_token_count} tokens), "
                 f"limiting response to {effective_max_new_tokens} tokens"
             )
+
+        
 
         client = (
             self._client.with_options(timeout=self.request_timeout)

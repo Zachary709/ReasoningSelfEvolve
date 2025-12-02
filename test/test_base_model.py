@@ -214,7 +214,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="/home/zhangdw/models/DeepSeek/DeepSeek-R1-0528-Qwen3-8B/",
+        default="/home/zhangdw/models/Qwen/Qwen3-8B",
         help="模型路径",
     )
     parser.add_argument(
@@ -232,13 +232,13 @@ def main():
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.0,
+        default=0.6,
         help="温度参数",
     )
     parser.add_argument(
         "--top_p",
         type=float,
-        default=1.0,
+        default=0.95,
         help="top_p参数",
     )
     parser.add_argument(
