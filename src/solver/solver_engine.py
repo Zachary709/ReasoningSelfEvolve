@@ -57,6 +57,8 @@ class SelfEvolvingSolver:
         )
 
         verification_body = ""
+        verification_text = ""
+        verdict = None
 
         for round_idx in range(1, rounds + 1):
             # if verdict == 1:
@@ -188,7 +190,7 @@ class SelfEvolvingSolver:
         return full_text, body
 
     @staticmethod
-    def _extract_report(text: str) -> Optional[str]:
+    def _extract_report(text: str) -> str:
         end_idx = text.find("</think>")
         if end_idx != -1:
             return text[end_idx + len("</think>"):].strip()

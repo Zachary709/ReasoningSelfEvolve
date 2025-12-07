@@ -3,6 +3,11 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections import Counter
+from typing import List, Tuple
+
+import matplotlib.pyplot as plt
+from transformers import AutoTokenizer
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
@@ -98,8 +103,32 @@ Before finalizing your output, carefully review your "Method Sketch" and "Detail
 
 USER_PROMPT = r"""
 ### Problem ###
-Let $b \geq 2$ be an integer. Call a positive integer $n$ $b$\textit{-eautiful} if it has exactly two digits when expressed in base $b$, and these two digits sum to $\sqrt{n}$. For example, $81$ is $13$-eautiful because $81=\underline{6}\underline{3}_{13}$ and $6+3=\sqrt{81}$. Find the least integer $b \geq 2$ for which there are more than ten $b$-eautiful integers.
+
+Every morning Aya goes for a $9$-kilometer-long walk and stops at a coffee shop afterwards. When she walks at a constant speed of $s$ kilometers per hour, the walk takes her 4 hours, including $t$ minutes spent in the coffee shop. When she walks $s+2$ kilometers per hour, the walk takes her 2 hours and 24 minutes, including $t$ minutes spent in the coffee shop. Suppose Aya walks at $s+ rac{1}{2}$ kilometers per hour. Find the number of minutes the walk takes her, including the $t$ minutes spent in the coffee shop.
 """
+
+
+def format_token_label(tokenizer: AutoTokenizer, token: str) -> str:
+    """Render tokenizer-specific tokens into a human-readable label."""
+    try:
+        readable = tokenizer.convert_tokens_to_string([token])
+    except Exception:
+        readable = token
+
+    readable = readable.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+
+    if readable == "":
+        return repr(token)
+
+    if readable.strip() == "":
+        # Token is purely whitespace; expose each space.
+        return "␠" * len(readable)
+
+    leading_spaces = len(readable) - len(readable.lstrip(" "))
+    trailing_spaces = len(readable) - len(readable.rstrip(" "))
+    core = readable.strip(" ")
+    label = f"{'␠' * leading_spaces}{core}{'␠' * trailing_spaces}"
+    return label
 
 
 
@@ -107,7 +136,7 @@ def main() -> None:
     
     model_path = "/home/zhangdw/models/Qwen/Qwen3-8B"
     api_base = "http://0.0.0.0:8000"
-    max_context_length = 32768
+    max_context_length = 1000
     max_new_tokens = 32768
     temperature = 0.6
     top_p = 0.95
@@ -137,6 +166,44 @@ def main() -> None:
 
     print("回答：")
     print(answer)
+
+    # Token-level diagnostics for the generated text
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path,
+        torch_dtype="auto",
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    tokens = tokenizer.tokenize(answer)
+    counts = Counter(tokens)
+    total_tokens = sum(counts.values())
+
+    print("\nTop 20 tokens (count | percentage):")
+    for tok, cnt in counts.most_common(20):
+        pct = (cnt / total_tokens) * 100 if total_tokens else 0
+        label = format_token_label(tokenizer, tok)
+        print(f"{label:>15}: {cnt:>5} | {pct:5.2f}%")
+
+    # Visualize the distribution of the most frequent tokens
+    def plot_top_tokens(token_counts: Counter, top_k: int = 20) -> Tuple[List[str], List[int]]:
+        top_items = token_counts.most_common(top_k)
+        labels = [format_token_label(tokenizer, item[0]) for item in top_items]
+        values = [item[1] for item in top_items]
+        return labels, values
+
+    labels, values = plot_top_tokens(counts, top_k=20)
+    os.makedirs("outputs", exist_ok=True)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.bar(range(len(values)), values, color="#4C72B0")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_ylabel("Count")
+    ax.set_title("Top token frequencies (generation output)")
+    fig.tight_layout()
+    output_path = os.path.join("outputs", "token_distribution.png")
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"Token distribution plot saved to: {output_path}")
 
 
 if __name__ == "__main__":
