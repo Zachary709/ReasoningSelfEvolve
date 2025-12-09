@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 from collections import Counter
+from pathlib import Path
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
@@ -15,6 +16,7 @@ if PROJECT_ROOT not in sys.path:
 
 from src.llm.llm_client import LocalLLM
 from src.utils.config import DEFAULT_MODEL_PATH, DEFAULT_VLLM_BASE_URL
+from src.utils.data_loader import load_problem
 
 SYSTEM_PROMPT_CN = """### Core Instructions ###
 
@@ -101,11 +103,6 @@ Before finalizing your output, carefully review your "Method Sketch" and "Detail
 '''
 
 
-USER_PROMPT = r"""
-### Problem ###
-
-Every morning Aya goes for a $9$-kilometer-long walk and stops at a coffee shop afterwards. When she walks at a constant speed of $s$ kilometers per hour, the walk takes her 4 hours, including $t$ minutes spent in the coffee shop. When she walks $s+2$ kilometers per hour, the walk takes her 2 hours and 24 minutes, including $t$ minutes spent in the coffee shop. Suppose Aya walks at $s+ rac{1}{2}$ kilometers per hour. Find the number of minutes the walk takes her, including the $t$ minutes spent in the coffee shop.
-"""
 
 
 def format_token_label(tokenizer: AutoTokenizer, token: str) -> str:
@@ -116,18 +113,22 @@ def format_token_label(tokenizer: AutoTokenizer, token: str) -> str:
         readable = token
 
     readable = readable.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    
+    # 转义 $ 符号，避免 matplotlib 把它当作 LaTeX 公式解析
+    readable = readable.replace("$", r"\$")
 
     if readable == "":
         return repr(token)
 
     if readable.strip() == "":
-        # Token is purely whitespace; expose each space.
-        return "␠" * len(readable)
+        # Token is purely whitespace; use underscore to represent spaces (ASCII safe)
+        return "_" * len(readable)
 
     leading_spaces = len(readable) - len(readable.lstrip(" "))
     trailing_spaces = len(readable) - len(readable.rstrip(" "))
     core = readable.strip(" ")
-    label = f"{'␠' * leading_spaces}{core}{'␠' * trailing_spaces}"
+    # 用下划线表示空格，避免字体不支持的 Unicode 符号
+    label = f"{'_' * leading_spaces}{core}{'_' * trailing_spaces}"
     return label
 
 
@@ -136,12 +137,19 @@ def main() -> None:
     
     model_path = "/home/zhangdw/models/Qwen/Qwen3-8B"
     api_base = "http://0.0.0.0:8000"
-    max_context_length = 1000
+    max_context_length = 32768
     max_new_tokens = 32768
     temperature = 0.6
     top_p = 0.95
     dry_run = False
-    texts = [{"role": "system", "content": SYSTEM_PROMPT_EN}, {"role": "user", "content": USER_PROMPT}]
+    
+    # 使用 data_loader 加载题目
+    problem_id = "2024-I-1"
+    questions_dir = Path(PROJECT_ROOT) / "questions"
+    problem = load_problem(questions_dir, problem_id=problem_id)
+    user_prompt = f"### Problem ###\n\n{problem.prompt}"
+    
+    texts = [{"role": "system", "content": SYSTEM_PROMPT_EN}, {"role": "user", "content": user_prompt}]
     client = LocalLLM(
         model_path=model_path,
         api_base=api_base,
@@ -184,26 +192,78 @@ def main() -> None:
         label = format_token_label(tokenizer, tok)
         print(f"{label:>15}: {cnt:>5} | {pct:5.2f}%")
 
-    # Visualize the distribution of the most frequent tokens
-    def plot_top_tokens(token_counts: Counter, top_k: int = 20) -> Tuple[List[str], List[int]]:
-        top_items = token_counts.most_common(top_k)
-        labels = [format_token_label(tokenizer, item[0]) for item in top_items]
-        values = [item[1] for item in top_items]
+    # Visualize the distribution of all tokens
+    def plot_all_tokens(token_counts: Counter) -> Tuple[List[str], List[int]]:
+        all_items = token_counts.most_common()  # 获取所有 token，按频率降序排列
+        labels = [format_token_label(tokenizer, item[0]) for item in all_items]
+        values = [item[1] for item in all_items]
         return labels, values
 
-    labels, values = plot_top_tokens(counts, top_k=20)
-    os.makedirs("outputs", exist_ok=True)
-    fig, ax = plt.subplots(figsize=(10, 6))
+    labels, values = plot_all_tokens(counts)
+    # 创建 image/{problem_id}/ 目录
+    image_dir = os.path.join(PROJECT_ROOT, "imags", problem_id)
+    os.makedirs(image_dir, exist_ok=True)
+    # 根据 token 数量动态调整图表宽度
+    fig_width = max(20, len(labels) * 0.3)  # 每个 token 大约 0.3 英寸宽
+    fig, ax = plt.subplots(figsize=(fig_width, 8))
     ax.bar(range(len(values)), values, color="#4C72B0")
     ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=45, ha="right")
-    ax.set_ylabel("Count")
-    ax.set_title("Top token frequencies (generation output)")
+    ax.set_xticklabels(labels, rotation=90, ha="center", fontsize=6)  # 垂直旋转，字体缩小
+    ax.set_yscale('log')  # 使用对数刻度
+    ax.set_ylabel("Count (log scale)")
+    ax.set_title(f"All token frequencies - Log Scale ({problem_id})")
     fig.tight_layout()
-    output_path = os.path.join("outputs", "token_distribution.png")
+    output_path = os.path.join(image_dir, "token_distribution.png")
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Token distribution plot saved to: {output_path}")
+
+    # 额外生成一张对数分箱的图表
+    # 第1个柱子：第1多的token，第2个柱子：第2-3多，第3个柱子：第4-7多，以此类推
+    def plot_log_binned_tokens(values: List[int]) -> None:
+        if not values:
+            return
+        
+        bin_labels = []
+        bin_values = []
+        
+        idx = 0
+        bin_num = 0
+        while idx < len(values):
+            # 每个区间的大小是 2^bin_num
+            bin_size = 2 ** bin_num
+            start_idx = idx
+            end_idx = min(idx + bin_size, len(values))
+            
+            # 计算该区间内所有 token 的总出现次数
+            bin_sum = sum(values[start_idx:end_idx])
+            bin_values.append(bin_sum)
+            
+            # 生成区间标签（使用排名，从1开始）
+            start_rank = start_idx + 1
+            end_rank = end_idx
+            if start_rank == end_rank:
+                bin_labels.append(f"#{start_rank}")
+            else:
+                bin_labels.append(f"#{start_rank}-{end_rank}")
+            
+            idx = end_idx
+            bin_num += 1
+        
+        fig2, ax2 = plt.subplots(figsize=(12, 6))
+        ax2.bar(range(len(bin_values)), bin_values, color="#E07B39")
+        ax2.set_xticks(range(len(bin_labels)))
+        ax2.set_xticklabels(bin_labels, rotation=45, ha="right", fontsize=8)
+        ax2.set_xlabel("Token rank range (log-binned)")
+        ax2.set_ylabel("Total count in bin")
+        ax2.set_title(f"Token frequencies by log-binned rank ({problem_id})")
+        fig2.tight_layout()
+        output_path2 = os.path.join(image_dir, "token_distribution_log_binned.png")
+        fig2.savefig(output_path2)
+        plt.close(fig2)
+        print(f"Log-binned token distribution plot saved to: {output_path2}")
+    
+    plot_log_binned_tokens(values)
 
 
 if __name__ == "__main__":
