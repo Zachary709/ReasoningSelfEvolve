@@ -4,9 +4,13 @@
 使用 qwen_math 模块提供的数学结果判断功能来评估答案正确性。
 """
 
+import os
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 import sys
+
+from transformers import AutoTokenizer
 
 # 添加项目根目录到路径
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -16,48 +20,8 @@ from src.llm.llm_client import LocalLLM
 from src.prompts.prompts import PromptBuilder
 from src.utils.qwen_math import compute_score
 from src.utils.config import DEFAULT_MODEL_PATH, DEFAULT_VLLM_BASE_URL
-from src.utils.data_loader import load_problem, ProblemRecord
-
-
-def load_all_problems(
-    questions_dir: Path, questions_file: str = "aime2024_questions.txt"
-) -> List[ProblemRecord]:
-    """
-    使用 data_loader 中的方法加载所有问题。
-    
-    Args:
-        questions_dir: questions 文件夹路径
-        questions_file: 问题文件名
-    
-    Returns:
-        List of ProblemRecord 对象
-    """
-    questions_path = questions_dir / questions_file
-    if not questions_path.exists():
-        raise FileNotFoundError(f"Questions file not found at {questions_path}")
-    
-    # 先读取所有问题ID
-    problem_ids = []
-    with questions_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split("\t", 1)
-            if len(parts) == 2:
-                problem_id = parts[0]
-                problem_ids.append(problem_id)
-    
-    if not problem_ids:
-        raise ValueError(f"No problems found in {questions_path}")
-    
-    # 使用 load_problem 加载每个问题
-    problems = []
-    for problem_id in problem_ids:
-        record = load_problem(questions_dir, problem_id, questions_file)
-        problems.append(record)
-    
-    return problems
+from src.utils.data_loader import load_problem, load_all_problems, ProblemRecord
+from src.utils.visualization import format_token_label, plot_token_distribution, plot_log_binned_tokens
 
 
 def test_base_model(
@@ -65,9 +29,9 @@ def test_base_model(
     questions_file: str = "aime2024_questions.txt",
     model_path: str = DEFAULT_MODEL_PATH,
     api_base: str = DEFAULT_VLLM_BASE_URL,
-    max_new_tokens: int = 4096,
-    temperature: float = 0.1,
-    top_p: float = 0.9,
+    max_new_tokens: int = 32768,
+    temperature: float = 0.6,
+    top_p: float = 0.95,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -103,6 +67,15 @@ def test_base_model(
         dry_run=dry_run,
     )
     prompt_builder = PromptBuilder()
+    
+    # 初始化 tokenizer（用于可视化）
+    print("初始化 tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path,
+        torch_dtype="auto",
+        device_map="auto",
+        trust_remote_code=True,
+    )
     
     # 测试结果
     results = []
@@ -155,6 +128,29 @@ def test_base_model(
             total_count += 1
             
             print(f"  结果: {'✓ 正确' if is_correct else '✗ 错误'} (score: {score})")
+            
+            # Token 统计与可视化
+            print("  正在生成可视化...")
+            tokens = tokenizer.tokenize(solution_text)
+            counts = Counter(tokens)
+            total_tokens_count = sum(counts.values())
+            
+            print(f"  Top 10 tokens (count | percentage) for {problem_id}:")
+            for tok, cnt in counts.most_common(10):
+                pct = (cnt / total_tokens_count) * 100 if total_tokens_count else 0
+                label = format_token_label(tokenizer, tok)
+                print(f"    {label:>15}: {cnt:>5} | {pct:5.2f}%")
+            
+            # 保存可视化图片
+            image_dir = os.path.join(PROJECT_ROOT, "images", problem_id)
+            
+            output_path = plot_token_distribution(counts, tokenizer, image_dir, problem_id)
+            if output_path:
+                print(f"  Token distribution plot saved to: {output_path}")
+            
+            output_path2 = plot_log_binned_tokens(counts, tokenizer, image_dir, problem_id)
+            if output_path2:
+                print(f"  Log-binned token distribution plot saved to: {output_path2}")
             
             results.append({
                 "problem_id": problem_id,

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import List, Tuple
 
-import matplotlib.pyplot as plt
 from transformers import AutoTokenizer
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -17,6 +14,8 @@ if PROJECT_ROOT not in sys.path:
 from src.llm.llm_client import LocalLLM
 from src.utils.config import DEFAULT_MODEL_PATH, DEFAULT_VLLM_BASE_URL
 from src.utils.data_loader import load_problem
+from src.utils.visualization import format_token_label, plot_token_distribution, plot_log_binned_tokens
+from src.prompts.prompts import PROMPT_SOLUTION_SYSTEM
 
 SYSTEM_PROMPT_CN = """### Core Instructions ###
 
@@ -66,75 +65,81 @@ List in detail all the mathematical conditions given in the problem.
 Before finalizing the output, please carefully review your 'known mathematical conditions' to ensure they are clean, rigorous, and strictly adhere to all the above instructions. Verify whether each statement directly contributes to the final coherent mathematical argument. """
 
 
-SYSTEM_PROMPT_EN = '''
-### Core Instructions ###
-
-*   **Rigor is Paramount:** Your primary goal is to produce a complete and rigorously justified solution. Every step in your solution must be logically sound and clearly explained. A correct final answer derived from flawed or incomplete reasoning is considered a failure.
-*   **Honesty About Completeness:** If you cannot find a complete solution, you must **not** guess or create a solution that appears correct but contains hidden flaws or justification gaps. Instead, you should present only significant partial results that you can rigorously prove. A partial result is considered significant if it represents a substantial advancement toward a full solution. Examples include:
-    *   Proving a key lemma.
-    *   Fully resolving one or more cases within a logically sound case-based proof.
-    *   Establishing a critical property of the mathematical objects in the problem.
-    *   For an optimization problem, proving an upper or lower bound without proving that this bound is achievable.
-*   **Use TeX for All Mathematics:** All mathematical variables, expressions, and relations must be enclosed in TeX delimiters (e.g., `Let $n$ be an integer.`).
-
-### Output Format ###
-
-Your response MUST be structured into the following sections, in this exact order.
-
-**1. Summary**
-
-Provide a concise overview of your findings. This section must contain two parts:
-
-*   **a. Verdict:** State clearly whether you have found a complete solution or a partial solution.
-    *   **For a complete solution:** State the final answer, e.g., "I have successfully solved the problem. The final answer is..."
-    *   **For a partial solution:** State the main rigorous conclusion(s) you were able to prove, e.g., "I have not found a complete solution, but I have rigorously proven that..."
-*   **b. Method Sketch:** Present a high-level, conceptual outline of your solution. This sketch should allow an expert to understand the logical flow of your argument without reading the full detail. It should include:
-    *   A narrative of your overall strategy.
-    *   The full and precise mathematical statements of any key lemmas or major intermediate results.
-    *   If applicable, describe any key constructions or case splits that form the backbone of your argument.
-
-**2. Detailed Solution**
-
-Present the full, step-by-step mathematical proof. Each step must be logically justified and clearly explained. The level of detail should be sufficient for an expert to verify the correctness of your reasoning without needing to fill in any gaps. This section must contain ONLY the complete, rigorous proof, free of any internal commentary, alternative approaches, or failed attempts.
-
-### Self-Correction Instruction ###
-
-Before finalizing your output, carefully review your "Method Sketch" and "Detailed Solution" to ensure they are clean, rigorous, and strictly adhere to all instructions provided above. Verify that every statement contributes directly to the final, coherent mathematical argument.
-'''
 
 
 
 
-def format_token_label(tokenizer: AutoTokenizer, token: str) -> str:
-    """Render tokenizer-specific tokens into a human-readable label."""
-    try:
-        readable = tokenizer.convert_tokens_to_string([token])
-    except Exception:
-        readable = token
+def get_all_problem_ids() -> list:
+    """生成所有 AIME 2024 题目 ID 列表"""
+    problem_ids = []
+    # 2024-I-1 到 2024-I-15
+    for i in range(1, 16):
+        problem_ids.append(f"2024-I-{i}")
+    # 2024-II-1 到 2024-II-15
+    for i in range(1, 16):
+        problem_ids.append(f"2024-II-{i}")
+    return problem_ids
 
-    readable = readable.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+
+def process_single_problem(
+    problem_id: str,
+    client: LocalLLM,
+    tokenizer: AutoTokenizer,
+    questions_dir: Path,
+) -> None:
+    """处理单个题目：生成回答并可视化 token 分布"""
+    print("\n" + "=" * 60)
+    print(f"正在处理题目: {problem_id}")
+    print("=" * 60)
     
-    # 转义 $ 符号，避免 matplotlib 把它当作 LaTeX 公式解析
-    readable = readable.replace("$", r"\$")
-
-    if readable == "":
-        return repr(token)
-
-    if readable.strip() == "":
-        # Token is purely whitespace; use underscore to represent spaces (ASCII safe)
-        return "_" * len(readable)
-
-    leading_spaces = len(readable) - len(readable.lstrip(" "))
-    trailing_spaces = len(readable) - len(readable.rstrip(" "))
-    core = readable.strip(" ")
-    # 用下划线表示空格，避免字体不支持的 Unicode 符号
-    label = f"{'_' * leading_spaces}{core}{'_' * trailing_spaces}"
-    return label
-
+    # 加载题目
+    try:
+        problem = load_problem(questions_dir, problem_id=problem_id)
+    except Exception as exc:
+        print(f"[加载题目失败] {problem_id}: {exc}")
+        return
+    
+    user_prompt = f"### Problem ###\n\n{problem.prompt}"
+    texts = [{"role": "system", "content": PROMPT_SOLUTION_SYSTEM}, {"role": "user", "content": user_prompt}]
+    
+    print("问题：")
+    print(texts[1]["content"])
+    print("-" * 40)
+    
+    # 生成回答
+    try:
+        answer = client.generate(texts)
+    except Exception as exc:
+        print(f"[LLM 调用失败] {problem_id}: {exc}")
+        return
+    
+    print("回答：")
+    print(answer)
+    
+    # Token 统计
+    tokens = tokenizer.tokenize(answer)
+    counts = Counter(tokens)
+    total_tokens = sum(counts.values())
+    
+    print(f"\nTop 20 tokens (count | percentage) for {problem_id}:")
+    for tok, cnt in counts.most_common(20):
+        pct = (cnt / total_tokens) * 100 if total_tokens else 0
+        label = format_token_label(tokenizer, tok)
+        print(f"{label:>15}: {cnt:>5} | {pct:5.2f}%")
+    
+    # 可视化
+    image_dir = os.path.join(PROJECT_ROOT, "images", problem_id)
+    
+    output_path = plot_token_distribution(counts, tokenizer, image_dir, problem_id)
+    if output_path:
+        print(f"Token distribution plot saved to: {output_path}")
+    
+    output_path2 = plot_log_binned_tokens(counts, tokenizer, image_dir, problem_id)
+    if output_path2:
+        print(f"Log-binned token distribution plot saved to: {output_path2}")
 
 
 def main() -> None:
-    
     model_path = "/home/zhangdw/models/Qwen/Qwen3-8B"
     api_base = "http://0.0.0.0:8000"
     max_context_length = 32768
@@ -143,13 +148,9 @@ def main() -> None:
     top_p = 0.95
     dry_run = False
     
-    # 使用 data_loader 加载题目
-    problem_id = "2024-I-1"
     questions_dir = Path(PROJECT_ROOT) / "questions"
-    problem = load_problem(questions_dir, problem_id=problem_id)
-    user_prompt = f"### Problem ###\n\n{problem.prompt}"
     
-    texts = [{"role": "system", "content": SYSTEM_PROMPT_EN}, {"role": "user", "content": user_prompt}]
+    # 初始化 LLM 客户端（只初始化一次）
     client = LocalLLM(
         model_path=model_path,
         api_base=api_base,
@@ -159,111 +160,30 @@ def main() -> None:
         top_p=top_p,
         dry_run=dry_run,
     )
-
-    print("=" * 40)
-    print("问题：")
-    print(texts[1]["content"])
-    # print(texts)
-    print("=" * 40)
-
-    try:
-        answer = client.generate(texts)
-    except Exception as exc:
-        print(f"[LLM 调用失败] {exc}")
-        return
-
-    print("回答：")
-    print(answer)
-
-    # Token-level diagnostics for the generated text
+    
+    # 初始化 tokenizer（只初始化一次）
     tokenizer = AutoTokenizer.from_pretrained(
         model_path,
         torch_dtype="auto",
         device_map="auto",
         trust_remote_code=True,
     )
-    tokens = tokenizer.tokenize(answer)
-    counts = Counter(tokens)
-    total_tokens = sum(counts.values())
-
-    print("\nTop 20 tokens (count | percentage):")
-    for tok, cnt in counts.most_common(20):
-        pct = (cnt / total_tokens) * 100 if total_tokens else 0
-        label = format_token_label(tokenizer, tok)
-        print(f"{label:>15}: {cnt:>5} | {pct:5.2f}%")
-
-    # Visualize the distribution of all tokens
-    def plot_all_tokens(token_counts: Counter) -> Tuple[List[str], List[int]]:
-        all_items = token_counts.most_common()  # 获取所有 token，按频率降序排列
-        labels = [format_token_label(tokenizer, item[0]) for item in all_items]
-        values = [item[1] for item in all_items]
-        return labels, values
-
-    labels, values = plot_all_tokens(counts)
-    # 创建 image/{problem_id}/ 目录
-    image_dir = os.path.join(PROJECT_ROOT, "imags", problem_id)
-    os.makedirs(image_dir, exist_ok=True)
-    # 根据 token 数量动态调整图表宽度
-    fig_width = max(20, len(labels) * 0.3)  # 每个 token 大约 0.3 英寸宽
-    fig, ax = plt.subplots(figsize=(fig_width, 8))
-    ax.bar(range(len(values)), values, color="#4C72B0")
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=90, ha="center", fontsize=6)  # 垂直旋转，字体缩小
-    ax.set_yscale('log')  # 使用对数刻度
-    ax.set_ylabel("Count (log scale)")
-    ax.set_title(f"All token frequencies - Log Scale ({problem_id})")
-    fig.tight_layout()
-    output_path = os.path.join(image_dir, "token_distribution.png")
-    fig.savefig(output_path)
-    plt.close(fig)
-    print(f"Token distribution plot saved to: {output_path}")
-
-    # 额外生成一张对数分箱的图表
-    # 第1个柱子：第1多的token，第2个柱子：第2-3多，第3个柱子：第4-7多，以此类推
-    def plot_log_binned_tokens(values: List[int]) -> None:
-        if not values:
-            return
-        
-        bin_labels = []
-        bin_values = []
-        
-        idx = 0
-        bin_num = 0
-        while idx < len(values):
-            # 每个区间的大小是 2^bin_num
-            bin_size = 2 ** bin_num
-            start_idx = idx
-            end_idx = min(idx + bin_size, len(values))
-            
-            # 计算该区间内所有 token 的总出现次数
-            bin_sum = sum(values[start_idx:end_idx])
-            bin_values.append(bin_sum)
-            
-            # 生成区间标签（使用排名，从1开始）
-            start_rank = start_idx + 1
-            end_rank = end_idx
-            if start_rank == end_rank:
-                bin_labels.append(f"#{start_rank}")
-            else:
-                bin_labels.append(f"#{start_rank}-{end_rank}")
-            
-            idx = end_idx
-            bin_num += 1
-        
-        fig2, ax2 = plt.subplots(figsize=(12, 6))
-        ax2.bar(range(len(bin_values)), bin_values, color="#E07B39")
-        ax2.set_xticks(range(len(bin_labels)))
-        ax2.set_xticklabels(bin_labels, rotation=45, ha="right", fontsize=8)
-        ax2.set_xlabel("Token rank range (log-binned)")
-        ax2.set_ylabel("Total count in bin")
-        ax2.set_title(f"Token frequencies by log-binned rank ({problem_id})")
-        fig2.tight_layout()
-        output_path2 = os.path.join(image_dir, "token_distribution_log_binned.png")
-        fig2.savefig(output_path2)
-        plt.close(fig2)
-        print(f"Log-binned token distribution plot saved to: {output_path2}")
     
-    plot_log_binned_tokens(values)
+    # 获取所有题目 ID
+    problem_ids = get_all_problem_ids()
+    total_problems = len(problem_ids)
+    
+    print(f"共 {total_problems} 道题目需要处理")
+    print("题目列表:", problem_ids)
+    
+    # 遍历所有题目
+    for idx, problem_id in enumerate(problem_ids, 1):
+        print(f"\n[{idx}/{total_problems}] ", end="")
+        process_single_problem(problem_id, client, tokenizer, questions_dir)
+    
+    print("\n" + "=" * 60)
+    print("所有题目处理完成！")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

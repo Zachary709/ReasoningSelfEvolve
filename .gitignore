@@ -33,6 +33,7 @@ Thumbs.db
 
 # Project artifacts
 outputs/
+images/
 *.log
 *.tmp
 *.bak

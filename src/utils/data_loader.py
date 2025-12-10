@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 @dataclass
@@ -76,4 +76,45 @@ def load_problem(questions_dir: Path, problem_id: Optional[str] = None, question
                         break
     
     return ProblemRecord(problem_id=selected_id, prompt=questions_dict[selected_id], answer=answer)
+
+
+def load_all_problems(
+    questions_dir: Path, questions_file: str = "aime2024_questions.txt"
+) -> List[ProblemRecord]:
+    """
+    加载问题文件中的所有问题。
+    
+    Args:
+        questions_dir: questions 文件夹路径
+        questions_file: 问题文件名
+    
+    Returns:
+        List of ProblemRecord 对象
+    """
+    questions_path = questions_dir / questions_file
+    if not questions_path.exists():
+        raise FileNotFoundError(f"Questions file not found at {questions_path}")
+    
+    # 先读取所有问题ID
+    problem_ids = []
+    with questions_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                problem_id = parts[0]
+                problem_ids.append(problem_id)
+    
+    if not problem_ids:
+        raise ValueError(f"No problems found in {questions_path}")
+    
+    # 使用 load_problem 加载每个问题
+    problems = []
+    for problem_id in problem_ids:
+        record = load_problem(questions_dir, problem_id, questions_file)
+        problems.append(record)
+    
+    return problems
 
