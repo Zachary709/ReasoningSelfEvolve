@@ -205,3 +205,4 @@ class SelfEvolvingSolver:
         line = "~" * 30
         return f"{line} {label} {line}"
 
+
