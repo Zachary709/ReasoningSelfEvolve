@@ -1,0 +1,18 @@
+# test_base_model 配置文件
+
+# 问题相关配置
+questions_dir: /home/zhangdw/ReasoningSelfEvolve/questions
+questions_file: aime2024_questions.txt
+
+# 模型相关配置
+model: /home/zhangdw/models/Qwen/Qwen3-8B
+api_base: http://0.0.0.0:8000
+
+# 生成参数
+max_new_tokens: 32768
+temperature: 0.6
+top_p: 0.95
+
+# 运行模式
+dry_run: false
+

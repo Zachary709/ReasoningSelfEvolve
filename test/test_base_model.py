@@ -5,11 +5,13 @@
 """
 
 import os
-from collections import Counter
+import json
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Any, Optional
+from collections import Counter
 import sys
 
+import yaml
 from transformers import AutoTokenizer
 
 # 添加项目根目录到路径
@@ -21,7 +23,111 @@ from src.prompts.prompts import PromptBuilder
 from src.utils.qwen_math import compute_score
 from src.utils.config import DEFAULT_MODEL_PATH, DEFAULT_VLLM_BASE_URL
 from src.utils.data_loader import load_problem, load_all_problems, ProblemRecord
-from src.utils.visualization import format_token_label, plot_token_distribution, plot_log_binned_tokens
+
+# 默认配置文件路径
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "test_base_model_config.yaml"
+
+
+def format_token_label(tokenizer: AutoTokenizer, token: str) -> str:
+    """
+    格式化 token 标签用于显示。
+    将特殊字符转换为可读形式。
+    
+    Args:
+        tokenizer: tokenizer 实例
+        token: 原始 token 字符串
+    
+    Returns:
+        格式化后的标签字符串
+    """
+    # 替换常见的特殊字符
+    label = token
+    label = label.replace("Ġ", "_")      # 空格前缀
+    label = label.replace("Ċ", "\\n")    # 换行符
+    label = label.replace("ĉ", "\\t")    # 制表符
+    label = label.replace("$", "\\$")    # 美元符号
+    return label
+
+
+def save_solution_and_token_stats(
+    problem_id: str,
+    solution_text: str,
+    tokenizer: AutoTokenizer,
+    project_root: Path,
+) -> Dict[str, Any]:
+    """
+    保存 solution.txt 和 token_stats.json 到 outputs 文件夹。
+    
+    Args:
+        problem_id: 问题 ID
+        solution_text: 生成的解答文本
+        tokenizer: 用于 tokenize 的 tokenizer
+        project_root: 项目根目录
+    
+    Returns:
+        包含 token 统计信息的字典
+    """
+    # 创建输出目录
+    output_dir = project_root / "outputs" / problem_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 保存 solution.txt
+    solution_path = output_dir / "solution.txt"
+    with open(solution_path, "w", encoding="utf-8") as f:
+        f.write(solution_text)
+    print(f"    Solution saved to: {solution_path}")
+    
+    # Token 统计
+    tokens = tokenizer.tokenize(solution_text)
+    counts = Counter(tokens)
+    total_tokens_count = sum(counts.values())
+    
+    # 构建 token_stats 字典
+    token_stats = {
+        "problem_id": problem_id,
+        "total_tokens": total_tokens_count,
+        "unique_tokens": len(counts),
+        "token_counts": dict(counts.most_common()),  # 按频率排序的完整 token 计数
+        "top_20_tokens": [
+            {
+                "token": tok,
+                "label": format_token_label(tokenizer, tok),
+                "count": cnt,
+                "percentage": round((cnt / total_tokens_count) * 100, 4) if total_tokens_count else 0
+            }
+            for tok, cnt in counts.most_common(20)
+        ],
+    }
+    
+    # 保存 token_stats.json
+    token_stats_path = output_dir / "token_stats.json"
+    with open(token_stats_path, "w", encoding="utf-8") as f:
+        json.dump(token_stats, f, ensure_ascii=False, indent=2)
+    print(f"    Token stats saved to: {token_stats_path}")
+    
+    return token_stats
+
+
+def load_config(config_path: Optional[Path] = None) -> dict:
+    """
+    从 YAML 配置文件加载配置。
+    
+    Args:
+        config_path: 配置文件路径，默认为 config/test_base_model_config.yaml
+    
+    Returns:
+        配置字典
+    """
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+    
+    if not config_path.exists():
+        raise FileNotFoundError(f"配置文件不存在: {config_path}")
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    
+    return config
 
 
 def test_base_model(
@@ -129,28 +235,14 @@ def test_base_model(
             
             print(f"  结果: {'✓ 正确' if is_correct else '✗ 错误'} (score: {score})")
             
-            # Token 统计与可视化
-            print("  正在生成可视化...")
-            tokens = tokenizer.tokenize(solution_text)
-            counts = Counter(tokens)
-            total_tokens_count = sum(counts.values())
-            
-            print(f"  Top 10 tokens (count | percentage) for {problem_id}:")
-            for tok, cnt in counts.most_common(10):
-                pct = (cnt / total_tokens_count) * 100 if total_tokens_count else 0
-                label = format_token_label(tokenizer, tok)
-                print(f"    {label:>15}: {cnt:>5} | {pct:5.2f}%")
-            
-            # 保存可视化图片
-            image_dir = os.path.join(PROJECT_ROOT, "images", problem_id)
-            
-            output_path = plot_token_distribution(counts, tokenizer, image_dir, problem_id)
-            if output_path:
-                print(f"  Token distribution plot saved to: {output_path}")
-            
-            output_path2 = plot_log_binned_tokens(counts, tokenizer, image_dir, problem_id)
-            if output_path2:
-                print(f"  Log-binned token distribution plot saved to: {output_path2}")
+            # 保存 solution 和 token 统计
+            print("  正在保存结果...")
+            save_solution_and_token_stats(
+                problem_id=problem_id,
+                solution_text=solution_text,
+                tokenizer=tokenizer,
+                project_root=PROJECT_ROOT,
+            )
             
             results.append({
                 "problem_id": problem_id,
@@ -196,66 +288,96 @@ def main():
     
     parser = argparse.ArgumentParser(description="测试 base model 在 AIME 2024 问题集上的表现")
     parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="配置文件路径",
+    )
+    parser.add_argument(
         "--questions_dir",
         type=Path,
-        default=PROJECT_ROOT / "questions",
-        help="questions 文件夹路径",
+        default=None,
+        help="questions 文件夹路径（覆盖配置文件）",
     )
     parser.add_argument(
         "--questions_file",
         type=str,
-        default="aime2024_questions.txt",
-        help="问题文件名",
+        default=None,
+        help="问题文件名（覆盖配置文件）",
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="/home/zhangdw/models/Qwen/Qwen3-8B",
-        help="模型路径",
+        default=None,
+        help="模型路径（覆盖配置文件）",
     )
     parser.add_argument(
         "--api_base",
         type=str,
-        default=DEFAULT_VLLM_BASE_URL,
-        help="API base URL",
+        default=None,
+        help="API base URL（覆盖配置文件）",
     )
     parser.add_argument(
         "--max_new_tokens",
         type=int,
-        default=32768,
-        help="最大生成token数",
+        default=None,
+        help="最大生成token数（覆盖配置文件）",
     )
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.6,
-        help="温度参数",
+        default=None,
+        help="温度参数（覆盖配置文件）",
     )
     parser.add_argument(
         "--top_p",
         type=float,
-        default=0.95,
-        help="top_p参数",
+        default=None,
+        help="top_p参数（覆盖配置文件）",
     )
     parser.add_argument(
         "--dry_run",
         action="store_true",
-        default=False,
-        help="Dry run模式（不实际调用模型）",
+        default=None,
+        help="Dry run模式（覆盖配置文件）",
     )
     
     args = parser.parse_args()
     
+    # 加载配置文件
+    print(f"加载配置文件: {args.config}")
+    config = load_config(args.config)
+    
+    # 命令行参数覆盖配置文件
+    questions_dir = args.questions_dir if args.questions_dir is not None else Path(config.get("questions_dir", PROJECT_ROOT / "questions"))
+    questions_file = args.questions_file if args.questions_file is not None else config.get("questions_file", "aime2024_questions.txt")
+    model_path = args.model if args.model is not None else config.get("model", DEFAULT_MODEL_PATH)
+    api_base = args.api_base if args.api_base is not None else config.get("api_base", DEFAULT_VLLM_BASE_URL)
+    max_new_tokens = args.max_new_tokens if args.max_new_tokens is not None else config.get("max_new_tokens", 32768)
+    temperature = args.temperature if args.temperature is not None else config.get("temperature", 0.6)
+    top_p = args.top_p if args.top_p is not None else config.get("top_p", 0.95)
+    dry_run = args.dry_run if args.dry_run is not None else config.get("dry_run", False)
+    
+    print(f"配置参数:")
+    print(f"  questions_dir: {questions_dir}")
+    print(f"  questions_file: {questions_file}")
+    print(f"  model: {model_path}")
+    print(f"  api_base: {api_base}")
+    print(f"  max_new_tokens: {max_new_tokens}")
+    print(f"  temperature: {temperature}")
+    print(f"  top_p: {top_p}")
+    print(f"  dry_run: {dry_run}")
+    
     # 运行测试
     results = test_base_model(
-        questions_dir=args.questions_dir,
-        questions_file=args.questions_file,
-        model_path=args.model,
-        api_base=args.api_base,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        dry_run=args.dry_run,
+        questions_dir=questions_dir,
+        questions_file=questions_file,
+        model_path=model_path,
+        api_base=api_base,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        dry_run=dry_run,
     )
 
 
