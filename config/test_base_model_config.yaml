@@ -18,4 +18,4 @@ dry_run: false
 
 
 # 断点重连相关配置
-resume: None
+resume: 12-12_23-41

@@ -28,34 +28,44 @@ from src.utils.data_loader import load_problem, load_all_problems, ProblemRecord
 # 默认配置文件路径
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "test_base_model_config.yaml"
 
-# 测试输出目录
-TEST_OUTPUTS_DIR = Path(__file__).parent / "outputs"
+# 测试输出目录（使用项目根目录下的 outputs）
+TEST_OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 
 
 class OutputManager:
     """
     输出文件管理器，支持流式写入。
-    文件名格式为 "MM-DD_HH-MM.out"，基于开始运行的时间。
+    输出到 test/outputs/{session_id}/run.out，session_id 格式为 "MM-DD_HH-MM"。
     """
     
-    def __init__(self, output_dir: Path = TEST_OUTPUTS_DIR):
+    def __init__(self, output_dir: Path = TEST_OUTPUTS_DIR, session_id: Optional[str] = None):
         """
         初始化输出管理器。
         
         Args:
-            output_dir: 输出目录路径
+            output_dir: 输出根目录路径
+            session_id: 会话 ID（格式为 MM-DD_HH-MM），为 None 则使用当前时间
         """
-        self.output_dir = output_dir
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 生成文件名：MM-DD_HH-MM
         self.start_time = datetime.now()
-        self.filename = self.start_time.strftime("%m-%d_%H-%M") + ".out"
-        self.filepath = self.output_dir / self.filename
+        
+        # 生成或使用 session_id
+        if session_id:
+            self.session_id = session_id
+        else:
+            self.session_id = self.start_time.strftime("%m-%d_%H-%M")
+        
+        # 创建 session 子文件夹
+        self.session_dir = output_dir / self.session_id
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 文件名固定为 run.out
+        self.filename = "run.out"
+        self.filepath = self.session_dir / self.filename
         
         # 清空或创建文件（覆盖模式）
         with open(self.filepath, "w", encoding="utf-8") as f:
             f.write(f"# 测试开始时间: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# 会话 ID: {self.session_id}\n")
             f.write("=" * 80 + "\n\n")
         
         print(f"输出文件: {self.filepath}")
@@ -115,7 +125,7 @@ class OutputManager:
 class ProgressTracker:
     """
     进度跟踪器，支持题级别的断点重连。
-    进度文件保存已完成问题的 ID 列表，支持中断后继续运行。
+    进度文件保存到 test/outputs/{session_id}/progress.json。
     """
     
     def __init__(self, output_dir: Path = TEST_OUTPUTS_DIR, session_id: Optional[str] = None):
@@ -123,20 +133,21 @@ class ProgressTracker:
         初始化进度跟踪器。
         
         Args:
-            output_dir: 输出目录路径
+            output_dir: 输出根目录路径
             session_id: 会话标识（用于断点重连），格式为 "MM-DD_HH-MM"
         """
-        self.output_dir = output_dir
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 如果提供了 session_id，使用它来恢复进度
-        self.session_id = session_id
+        # 如果提供了 session_id，使用它；否则使用当前时间
         if session_id:
-            self.progress_file = self.output_dir / f"{session_id}.progress.json"
+            self.session_id = session_id
         else:
-            # 新会话，使用当前时间
             self.session_id = datetime.now().strftime("%m-%d_%H-%M")
-            self.progress_file = self.output_dir / f"{self.session_id}.progress.json"
+        
+        # 创建 session 子文件夹
+        self.session_dir = output_dir / self.session_id
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 进度文件固定为 progress.json
+        self.progress_file = self.session_dir / "progress.json"
         
         # 加载已完成的问题
         self.completed_problems: Set[str] = set()
@@ -342,10 +353,11 @@ def test_base_model(
         progress_tracker = ProgressTracker(session_id=resume_session)
         # 输出追加到已有文件
         output_manager = OutputManager.__new__(OutputManager)
-        output_manager.output_dir = TEST_OUTPUTS_DIR
-        output_manager.output_dir.mkdir(parents=True, exist_ok=True)
-        output_manager.filename = resume_session + ".out"
-        output_manager.filepath = output_manager.output_dir / output_manager.filename
+        output_manager.session_id = resume_session
+        output_manager.session_dir = TEST_OUTPUTS_DIR / resume_session
+        output_manager.session_dir.mkdir(parents=True, exist_ok=True)
+        output_manager.filename = "run.out"
+        output_manager.filepath = output_manager.session_dir / output_manager.filename
         output_manager.start_time = datetime.now()
         # 追加恢复标记
         output_manager.write(f"\n\n# 断点恢复时间: {output_manager.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -354,7 +366,7 @@ def test_base_model(
     else:
         # 新会话模式
         output_manager = OutputManager()
-        progress_tracker = ProgressTracker(session_id=output_manager.start_time.strftime("%m-%d_%H-%M"))
+        progress_tracker = ProgressTracker(session_id=output_manager.session_id)
     
     # 使用 data_loader 中的方法加载所有问题
     print(f"正在从 {questions_dir} 加载问题文件: {questions_file}")
@@ -531,86 +543,23 @@ def test_base_model(
 
 
 def main():
-    """主函数"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="测试 base model 在 AIME 2024 问题集上的表现")
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=DEFAULT_CONFIG_PATH,
-        help="配置文件路径",
-    )
-    parser.add_argument(
-        "--questions_dir",
-        type=Path,
-        default=None,
-        help="questions 文件夹路径（覆盖配置文件）",
-    )
-    parser.add_argument(
-        "--questions_file",
-        type=str,
-        default=None,
-        help="问题文件名（覆盖配置文件）",
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=None,
-        help="模型路径（覆盖配置文件）",
-    )
-    parser.add_argument(
-        "--api_base",
-        type=str,
-        default=None,
-        help="API base URL（覆盖配置文件）",
-    )
-    parser.add_argument(
-        "--max_new_tokens",
-        type=int,
-        default=None,
-        help="最大生成token数（覆盖配置文件）",
-    )
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        default=None,
-        help="温度参数（覆盖配置文件）",
-    )
-    parser.add_argument(
-        "--top_p",
-        type=float,
-        default=None,
-        help="top_p参数（覆盖配置文件）",
-    )
-    parser.add_argument(
-        "--dry_run",
-        action="store_true",
-        default=None,
-        help="Dry run模式（覆盖配置文件）",
-    )
-    parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="断点重连的会话 ID（格式为 'MM-DD_HH-MM'），从上次中断位置继续",
-    )
-    
-    args = parser.parse_args()
-    
+    """主函数：从配置文件读取参数并运行测试"""
     # 加载配置文件
-    print(f"加载配置文件: {args.config}")
-    config = load_config(args.config)
+    print(f"加载配置文件: {DEFAULT_CONFIG_PATH}")
+    config = load_config(DEFAULT_CONFIG_PATH)
     
-    # 命令行参数覆盖配置文件
-    questions_dir = args.questions_dir if args.questions_dir is not None else Path(config.get("questions_dir", PROJECT_ROOT / "questions"))
-    questions_file = args.questions_file if args.questions_file is not None else config.get("questions_file", "aime2024_questions.txt")
-    model_path = args.model if args.model is not None else config.get("model", DEFAULT_MODEL_PATH)
-    api_base = args.api_base if args.api_base is not None else config.get("api_base", DEFAULT_VLLM_BASE_URL)
-    max_new_tokens = args.max_new_tokens if args.max_new_tokens is not None else config.get("max_new_tokens", 32768)
-    temperature = args.temperature if args.temperature is not None else config.get("temperature", 0.6)
-    top_p = args.top_p if args.top_p is not None else config.get("top_p", 0.95)
-    dry_run = args.dry_run if args.dry_run is not None else config.get("dry_run", False)
+    # 从配置文件读取参数
+    questions_dir = Path(config.get("questions_dir", PROJECT_ROOT / "questions"))
+    questions_file = config.get("questions_file", "aime2024_questions.txt")
+    model_path = config.get("model", DEFAULT_MODEL_PATH)
+    api_base = config.get("api_base", DEFAULT_VLLM_BASE_URL)
+    max_new_tokens = config.get("max_new_tokens", 32768)
+    temperature = config.get("temperature", 0.6)
+    top_p = config.get("top_p", 0.95)
+    dry_run = config.get("dry_run", False)
+    resume_session = config.get("resume", None)
+    if resume_session.lower() == "none":
+        resume_session = None
     
     print(f"配置参数:")
     print(f"  questions_dir: {questions_dir}")
@@ -621,7 +570,7 @@ def main():
     print(f"  temperature: {temperature}")
     print(f"  top_p: {top_p}")
     print(f"  dry_run: {dry_run}")
-    print(f"  resume: {args.resume}")
+    print(f"  resume: {resume_session}")
     
     # 运行测试
     results = test_base_model(
@@ -633,12 +582,12 @@ def main():
         temperature=temperature,
         top_p=top_p,
         dry_run=dry_run,
-        resume_session=args.resume,
+        resume_session=resume_session,
     )
     
     # 输出会话 ID，便于断点重连
     print(f"\n会话 ID: {results.get('session_id')}")
-    print(f"如需断点重连，请使用: --resume {results.get('session_id')}")
+    print(f"如需断点重连，请在配置文件中设置: resume: {results.get('session_id')}")
 
 
 if __name__ == "__main__":
