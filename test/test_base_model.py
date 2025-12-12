@@ -7,8 +7,9 @@
 import os
 import json
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from collections import Counter
+from datetime import datetime
 import sys
 
 import yaml
@@ -26,6 +27,178 @@ from src.utils.data_loader import load_problem, load_all_problems, ProblemRecord
 
 # 默认配置文件路径
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "test_base_model_config.yaml"
+
+# 测试输出目录
+TEST_OUTPUTS_DIR = Path(__file__).parent / "outputs"
+
+
+class OutputManager:
+    """
+    输出文件管理器，支持流式写入。
+    文件名格式为 "MM-DD_HH-MM.out"，基于开始运行的时间。
+    """
+    
+    def __init__(self, output_dir: Path = TEST_OUTPUTS_DIR):
+        """
+        初始化输出管理器。
+        
+        Args:
+            output_dir: 输出目录路径
+        """
+        self.output_dir = output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 生成文件名：MM-DD_HH-MM
+        self.start_time = datetime.now()
+        self.filename = self.start_time.strftime("%m-%d_%H-%M") + ".out"
+        self.filepath = self.output_dir / self.filename
+        
+        # 清空或创建文件（覆盖模式）
+        with open(self.filepath, "w", encoding="utf-8") as f:
+            f.write(f"# 测试开始时间: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 80 + "\n\n")
+        
+        print(f"输出文件: {self.filepath}")
+    
+    def write(self, content: str, flush: bool = True):
+        """
+        流式写入内容到输出文件。
+        
+        Args:
+            content: 要写入的内容
+            flush: 是否立即刷新到磁盘
+        """
+        with open(self.filepath, "a", encoding="utf-8") as f:
+            f.write(content)
+            if flush:
+                f.flush()
+                os.fsync(f.fileno())  # 确保写入磁盘
+    
+    def writeln(self, content: str = "", flush: bool = True):
+        """写入一行内容"""
+        self.write(content + "\n", flush)
+    
+    def write_problem_start(self, idx: int, total: int, problem_id: str, problem_text: str, ground_truth: Optional[str]):
+        """写入问题开始标记"""
+        self.writeln()
+        self.writeln(f"[{idx}/{total}] 问题 ID: {problem_id}")
+        self.writeln(f"问题: {problem_text[:200]}..." if len(problem_text) > 200 else f"问题: {problem_text}")
+        if ground_truth:
+            self.writeln(f"标准答案: {ground_truth}")
+    
+    def write_problem_result(self, problem_id: str, is_correct: Optional[bool], score: Optional[float], 
+                             solution_preview: str = "", error: str = ""):
+        """写入问题结果"""
+        if error:
+            self.writeln(f"  错误: {error}")
+        elif is_correct is not None:
+            status = "✓ 正确" if is_correct else "✗ 错误"
+            self.writeln(f"  结果: {status} (score: {score})")
+            if solution_preview:
+                self.writeln(f"  解答预览: {solution_preview[:300]}...")
+        else:
+            self.writeln(f"  警告: 没有标准答案，跳过")
+        self.writeln("-" * 40)
+    
+    def write_summary(self, total_problems: int, total_with_answer: int, correct_count: int, accuracy: float):
+        """写入测试总结"""
+        self.writeln()
+        self.writeln("=" * 80)
+        self.writeln("测试完成!")
+        self.writeln(f"总问题数: {total_problems}")
+        self.writeln(f"有标准答案的问题数: {total_with_answer}")
+        self.writeln(f"正确答案数: {correct_count}")
+        self.writeln(f"准确率: {accuracy:.2%} ({correct_count}/{total_with_answer})")
+        self.writeln(f"结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+
+class ProgressTracker:
+    """
+    进度跟踪器，支持题级别的断点重连。
+    进度文件保存已完成问题的 ID 列表，支持中断后继续运行。
+    """
+    
+    def __init__(self, output_dir: Path = TEST_OUTPUTS_DIR, session_id: Optional[str] = None):
+        """
+        初始化进度跟踪器。
+        
+        Args:
+            output_dir: 输出目录路径
+            session_id: 会话标识（用于断点重连），格式为 "MM-DD_HH-MM"
+        """
+        self.output_dir = output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 如果提供了 session_id，使用它来恢复进度
+        self.session_id = session_id
+        if session_id:
+            self.progress_file = self.output_dir / f"{session_id}.progress.json"
+        else:
+            # 新会话，使用当前时间
+            self.session_id = datetime.now().strftime("%m-%d_%H-%M")
+            self.progress_file = self.output_dir / f"{self.session_id}.progress.json"
+        
+        # 加载已完成的问题
+        self.completed_problems: Set[str] = set()
+        self.results: Dict[str, Dict[str, Any]] = {}
+        self._load_progress()
+    
+    def _load_progress(self):
+        """从进度文件加载已完成的问题"""
+        if self.progress_file.exists():
+            try:
+                with open(self.progress_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.completed_problems = set(data.get("completed_problems", []))
+                    self.results = data.get("results", {})
+                    print(f"已恢复进度: {len(self.completed_problems)} 个问题已完成")
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"警告: 无法加载进度文件 {self.progress_file}: {e}")
+                self.completed_problems = set()
+                self.results = {}
+    
+    def _save_progress(self):
+        """保存进度到文件"""
+        data = {
+            "session_id": self.session_id,
+            "completed_problems": list(self.completed_problems),
+            "results": self.results,
+            "last_update": datetime.now().isoformat(),
+        }
+        with open(self.progress_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+    
+    def is_completed(self, problem_id: str) -> bool:
+        """检查问题是否已完成"""
+        return problem_id in self.completed_problems
+    
+    def mark_completed(self, problem_id: str, result: Dict[str, Any]):
+        """
+        标记问题已完成并保存结果。
+        
+        Args:
+            problem_id: 问题 ID
+            result: 问题的测试结果
+        """
+        self.completed_problems.add(problem_id)
+        self.results[problem_id] = result
+        self._save_progress()  # 立即保存，防止中断丢失
+    
+    def get_result(self, problem_id: str) -> Optional[Dict[str, Any]]:
+        """获取已完成问题的结果"""
+        return self.results.get(problem_id)
+    
+    def get_stats(self) -> Dict[str, int]:
+        """获取当前统计信息"""
+        correct_count = sum(1 for r in self.results.values() if r.get("correct") is True)
+        total_with_answer = sum(1 for r in self.results.values() if r.get("correct") is not None)
+        return {
+            "completed": len(self.completed_problems),
+            "correct": correct_count,
+            "total_with_answer": total_with_answer,
+        }
 
 
 def format_token_label(tokenizer: AutoTokenizer, token: str) -> str:
@@ -54,6 +227,7 @@ def save_solution_and_token_stats(
     solution_text: str,
     tokenizer: AutoTokenizer,
     project_root: Path,
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     保存 solution.txt 和 token_stats.json 到 outputs 文件夹。
@@ -63,12 +237,16 @@ def save_solution_and_token_stats(
         solution_text: 生成的解答文本
         tokenizer: 用于 tokenize 的 tokenizer
         project_root: 项目根目录
+        session_id: 会话 ID（日期格式 MM-DD_HH-MM），用于创建子文件夹
     
     Returns:
         包含 token 统计信息的字典
     """
-    # 创建输出目录
-    output_dir = project_root / "outputs" / problem_id
+    # 创建输出目录：outputs/session_id/problem_id
+    if session_id:
+        output_dir = project_root / "outputs" / session_id / problem_id
+    else:
+        output_dir = project_root / "outputs" / problem_id
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # 保存 solution.txt
@@ -139,6 +317,7 @@ def test_base_model(
     temperature: float = 0.6,
     top_p: float = 0.95,
     dry_run: bool = False,
+    resume_session: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     测试 base model 在问题集上的表现。
@@ -152,18 +331,45 @@ def test_base_model(
         temperature: 温度参数
         top_p: top_p参数
         dry_run: 是否为dry run模式
+        resume_session: 断点重连的会话 ID（格式为 "MM-DD_HH-MM"），为 None 则开始新会话
     
     Returns:
         包含测试结果的字典
     """
+    # 初始化输出管理器和进度跟踪器
+    if resume_session:
+        # 断点重连模式：使用已有的会话
+        progress_tracker = ProgressTracker(session_id=resume_session)
+        # 输出追加到已有文件
+        output_manager = OutputManager.__new__(OutputManager)
+        output_manager.output_dir = TEST_OUTPUTS_DIR
+        output_manager.output_dir.mkdir(parents=True, exist_ok=True)
+        output_manager.filename = resume_session + ".out"
+        output_manager.filepath = output_manager.output_dir / output_manager.filename
+        output_manager.start_time = datetime.now()
+        # 追加恢复标记
+        output_manager.write(f"\n\n# 断点恢复时间: {output_manager.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        output_manager.writeln("=" * 80)
+        print(f"断点重连模式: 恢复会话 {resume_session}")
+    else:
+        # 新会话模式
+        output_manager = OutputManager()
+        progress_tracker = ProgressTracker(session_id=output_manager.start_time.strftime("%m-%d_%H-%M"))
+    
     # 使用 data_loader 中的方法加载所有问题
     print(f"正在从 {questions_dir} 加载问题文件: {questions_file}")
+    output_manager.writeln(f"正在从 {questions_dir} 加载问题文件: {questions_file}")
     problems = load_all_problems(questions_dir, questions_file)
     print(f"共加载 {len(problems)} 个问题")
+    output_manager.writeln(f"共加载 {len(problems)} 个问题")
     
     # 初始化模型和提示构建器
     print(f"\n初始化模型: {model_path}")
     print(f"API base: {api_base}")
+    output_manager.writeln(f"\n模型: {model_path}")
+    output_manager.writeln(f"API base: {api_base}")
+    output_manager.writeln(f"参数: temperature={temperature}, top_p={top_p}, max_new_tokens={max_new_tokens}")
+    
     llm = LocalLLM(
         model_path=model_path,
         api_base=api_base,
@@ -187,27 +393,54 @@ def test_base_model(
     results = []
     correct_count = 0
     total_count = 0
+    skipped_count = 0
+    
+    # 从进度跟踪器恢复已有统计
+    if resume_session:
+        stats = progress_tracker.get_stats()
+        skipped_count = stats["completed"]
+        print(f"已跳过 {skipped_count} 个已完成的问题")
+        output_manager.writeln(f"已跳过 {skipped_count} 个已完成的问题")
     
     print("\n开始测试...")
     print("=" * 80)
+    output_manager.writeln("\n开始测试...")
+    output_manager.writeln("=" * 80)
     
     for idx, record in enumerate(problems, 1):
         problem_id = record.problem_id
         problem_text = record.prompt
         ground_truth = record.answer
         
+        # 检查是否已完成（断点重连）
+        if progress_tracker.is_completed(problem_id):
+            cached_result = progress_tracker.get_result(problem_id)
+            results.append(cached_result)
+            if cached_result.get("correct") is True:
+                correct_count += 1
+            if cached_result.get("correct") is not None:
+                total_count += 1
+            print(f"\n[{idx}/{len(problems)}] 问题 ID: {problem_id} - 已完成，跳过")
+            continue
+        
         print(f"\n[{idx}/{len(problems)}] 问题 ID: {problem_id}")
         print(f"问题: {problem_text[:100]}..." if len(problem_text) > 100 else f"问题: {problem_text}")
         
+        # 流式写入问题开始
+        output_manager.write_problem_start(idx, len(problems), problem_id, problem_text, ground_truth)
+        
         if ground_truth is None:
             print("  警告: 没有标准答案，跳过")
-            results.append({
+            result = {
                 "problem_id": problem_id,
                 "correct": None,
                 "score": None,
                 "ground_truth": None,
                 "solution": None,
-            })
+            }
+            results.append(result)
+            progress_tracker.mark_completed(problem_id, result)
+            output_manager.write_problem_result(problem_id, None, None)
             continue
         
         print(f"标准答案: {ground_truth}")
@@ -242,26 +475,37 @@ def test_base_model(
                 solution_text=solution_text,
                 tokenizer=tokenizer,
                 project_root=PROJECT_ROOT,
+                session_id=progress_tracker.session_id,
             )
             
-            results.append({
+            result = {
                 "problem_id": problem_id,
                 "correct": is_correct,
                 "score": score,
                 "ground_truth": ground_truth,
                 "solution": solution_text[:500] + "..." if len(solution_text) > 500 else solution_text,
-            })
+            }
+            results.append(result)
+            
+            # 流式写入结果并保存进度（题级别断点）
+            output_manager.write_problem_result(problem_id, is_correct, score, solution_text[:200])
+            progress_tracker.mark_completed(problem_id, result)
             
         except Exception as e:
             print(f"  错误: {e}")
-            results.append({
+            result = {
                 "problem_id": problem_id,
                 "correct": False,
                 "score": 0.0,
                 "ground_truth": ground_truth,
                 "solution": f"Error: {str(e)}",
-            })
+            }
+            results.append(result)
             total_count += 1
+            
+            # 流式写入错误并保存进度
+            output_manager.write_problem_result(problem_id, False, 0.0, error=str(e))
+            progress_tracker.mark_completed(problem_id, result)
     
     # 统计结果
     accuracy = correct_count / total_count if total_count > 0 else 0.0
@@ -273,12 +517,16 @@ def test_base_model(
     print(f"正确答案数: {correct_count}")
     print(f"准确率: {accuracy:.2%} ({correct_count}/{total_count})")
     
+    # 写入测试总结
+    output_manager.write_summary(len(problems), total_count, correct_count, accuracy)
+    
     return {
         "total_problems": len(problems),
         "total_with_answer": total_count,
         "correct_count": correct_count,
         "accuracy": accuracy,
         "results": results,
+        "session_id": progress_tracker.session_id,
     }
 
 
@@ -341,6 +589,12 @@ def main():
         default=None,
         help="Dry run模式（覆盖配置文件）",
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="断点重连的会话 ID（格式为 'MM-DD_HH-MM'），从上次中断位置继续",
+    )
     
     args = parser.parse_args()
     
@@ -367,6 +621,7 @@ def main():
     print(f"  temperature: {temperature}")
     print(f"  top_p: {top_p}")
     print(f"  dry_run: {dry_run}")
+    print(f"  resume: {args.resume}")
     
     # 运行测试
     results = test_base_model(
@@ -378,7 +633,12 @@ def main():
         temperature=temperature,
         top_p=top_p,
         dry_run=dry_run,
+        resume_session=args.resume,
     )
+    
+    # 输出会话 ID，便于断点重连
+    print(f"\n会话 ID: {results.get('session_id')}")
+    print(f"如需断点重连，请使用: --resume {results.get('session_id')}")
 
 
 if __name__ == "__main__":

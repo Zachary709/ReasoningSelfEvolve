@@ -16,3 +16,6 @@ top_p: 0.95
 # 运行模式
 dry_run: false
 
+
+# 断点重连相关配置
+resume: None

@@ -25,6 +25,7 @@ from src.utils.qwen_math import compute_score
 def load_token_stats(
     problem_id: str,
     project_root: Optional[Path] = None,
+    session_id: Optional[str] = None,
 ) -> Optional[dict]:
     """
     从 outputs 文件夹加载单个问题的 token 统计信息。
@@ -32,6 +33,7 @@ def load_token_stats(
     Args:
         problem_id: 问题 ID
         project_root: 项目根目录，默认为 PROJECT_ROOT
+        session_id: 会话 ID（日期格式 MM-DD_HH-MM），用于指定子文件夹
     
     Returns:
         包含 token 统计信息的字典，如果文件不存在则返回 None
@@ -39,8 +41,11 @@ def load_token_stats(
     if project_root is None:
         project_root = PROJECT_ROOT
     
-    # 直接从 outputs 文件夹读取已保存的 token 统计数据
-    token_stats_path = os.path.join(project_root, "outputs", problem_id, "token_stats.json")
+    # 直接从 outputs/session_id/problem_id 文件夹读取已保存的 token 统计数据
+    if session_id:
+        token_stats_path = os.path.join(project_root, "outputs", session_id, problem_id, "token_stats.json")
+    else:
+        token_stats_path = os.path.join(project_root, "outputs", problem_id, "token_stats.json")
     
     if not os.path.exists(token_stats_path):
         print(f"  Token stats file not found: {token_stats_path}")
@@ -54,17 +59,22 @@ def load_token_stats(
 
 def visualize_all_from_outputs(
     project_root: Optional[Path] = None,
+    session_id: Optional[str] = None,
 ) -> None:
     """
     从 outputs 文件夹读取所有已保存的 token 统计数据。
     
     Args:
         project_root: 项目根目录
+        session_id: 会话 ID（日期格式 MM-DD_HH-MM），用于指定子文件夹
     """
     if project_root is None:
         project_root = PROJECT_ROOT
     
-    outputs_dir = os.path.join(project_root, "outputs")
+    if session_id:
+        outputs_dir = os.path.join(project_root, "outputs", session_id)
+    else:
+        outputs_dir = os.path.join(project_root, "outputs")
     
     if not os.path.exists(outputs_dir):
         print(f"Outputs directory not found: {outputs_dir}")
@@ -87,7 +97,7 @@ def visualize_all_from_outputs(
     
     for idx, problem_id in enumerate(problem_ids, 1):
         print(f"\n[{idx}/{len(problem_ids)}] Processing {problem_id}...")
-        load_token_stats(problem_id, project_root)
+        load_token_stats(problem_id, project_root, session_id)
     
     print("\n" + "=" * 60)
     print("All visualizations completed!")
@@ -139,6 +149,7 @@ def get_log_binned_data(token_counts: Counter) -> Tuple[List[str], List[int]]:
 
 def collect_html_token_stats(
     project_root: Optional[Path] = None,
+    session_id: Optional[str] = None,
 ) -> List[Dict]:
     """
     获取 token 统计信息，便于 html 绘图。
@@ -146,6 +157,7 @@ def collect_html_token_stats(
     
     Args:
         project_root: 项目根目录
+        session_id: 会话 ID（日期格式 MM-DD_HH-MM），用于指定子文件夹
     
     Returns:
         包含所有问题 token 统计信息的列表
@@ -153,7 +165,10 @@ def collect_html_token_stats(
     if project_root is None:
         project_root = PROJECT_ROOT
     
-    outputs_dir = os.path.join(project_root, "outputs")
+    if session_id:
+        outputs_dir = os.path.join(project_root, "outputs", session_id)
+    else:
+        outputs_dir = os.path.join(project_root, "outputs")
     questions_dir = Path(project_root) / "questions"
     
     if not os.path.exists(outputs_dir):
@@ -179,7 +194,7 @@ def collect_html_token_stats(
     
     for idx, problem_id in enumerate(problem_ids, 1):
         # 使用 load_token_stats 加载 token 统计数据
-        token_data = load_token_stats(problem_id, project_root)
+        token_data = load_token_stats(problem_id, project_root, session_id)
         
         if token_data is None:
             print(f"  [{idx}/{len(problem_ids)}] Skipping {problem_id} - token_stats.json not found")
@@ -190,7 +205,10 @@ def collect_html_token_stats(
         bin_labels, bin_values = get_log_binned_data(token_counts)
         
         # 读取 solution 文本用于判断正确性和获取长度
-        solution_path = os.path.join(project_root, "outputs", problem_id, "solution.txt")
+        if session_id:
+            solution_path = os.path.join(project_root, "outputs", session_id, problem_id, "solution.txt")
+        else:
+            solution_path = os.path.join(project_root, "outputs", problem_id, "solution.txt")
         solution_text = ""
         if os.path.exists(solution_path):
             with open(solution_path, "r", encoding="utf-8") as f:
@@ -787,6 +805,7 @@ def generate_interactive_html(
 
 def generate_html_visualizations(
     project_root: Optional[Path] = None,
+    session_id: Optional[str] = None,
 ) -> None:
     """
     生成所有可视化：
@@ -795,15 +814,18 @@ def generate_html_visualizations(
     
     Args:
         project_root: 项目根目录
+        session_id: 会话 ID（日期格式 MM-DD_HH-MM），用于指定数据源子文件夹和输出子文件夹
     """
     if project_root is None:
         project_root = PROJECT_ROOT
     
     print("=" * 60)
     print("Collecting token statistics from all problems...")
+    if session_id:
+        print(f"Session ID: {session_id}")
     print("=" * 60)
     
-    all_stats = collect_html_token_stats(project_root)
+    all_stats = collect_html_token_stats(project_root, session_id)
     
     if not all_stats:
         print("No statistics collected. Exiting.")
@@ -811,7 +833,11 @@ def generate_html_visualizations(
     
     print(f"\nCollected statistics for {len(all_stats)} problems.")
     
-    output_dir = os.path.join(project_root, "images")
+    # 输出到 images/session_id/ 子文件夹
+    if session_id:
+        output_dir = os.path.join(project_root, "images", session_id)
+    else:
+        output_dir = os.path.join(project_root, "images")
     
     # 生成交互式 HTML
     print("\nGenerating interactive HTML...")
@@ -825,16 +851,19 @@ def generate_html_visualizations(
 
 
 def main():
-    # visualize_all_from_outputs()
-
     """主函数：从 outputs 读取数据并生成交互式 HTML"""
-    # 生成交互式 HTML（直接从 token_stats.json 读取数据，无需 tokenizer）
-    # generate_html_visualizations()
+    session_id = "12-12_23-00"
+    generate_html_visualizations(session_id=session_id)
 
 
+def compare_tokens(session_id: Optional[str] = None):
+    """比较两个问题的 token 差异（示例函数）"""
+    data1 = load_token_stats("2024-I-1", session_id=session_id)
+    data2 = load_token_stats("2024-I-2", session_id=session_id)
 
-    data1 = load_token_stats("2024-I-1")
-    data2 = load_token_stats("2024-I-2")
+    if data1 is None or data2 is None:
+        print("无法加载 token 统计数据")
+        return
 
     tokens1 = data1["token_counts"].keys()
     tokens2 = data2["token_counts"].keys()
@@ -842,12 +871,11 @@ def main():
     # 交集
     common_tokens = set(tokens1) & set(tokens2)
     
-    tokens1 = tokens1 - common_tokens
-    for token in tokens1:
+    tokens1_only = set(tokens1) - common_tokens
+    for token in tokens1_only:
         # 将特殊字符转换为可读形式
         label = token.replace("Ġ", "").replace("Ċ", "").replace("ĉ", "")
         print(label)
-
 
 
 if __name__ == "__main__":
