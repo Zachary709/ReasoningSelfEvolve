@@ -558,7 +558,7 @@ def main():
     top_p = config.get("top_p", 0.95)
     dry_run = config.get("dry_run", False)
     resume_session = config.get("resume", None)
-    if resume_session.lower() == "none":
+    if resume_session is not None and resume_session.lower() == "none":
         resume_session = None
     
     print(f"配置参数:")
