@@ -84,6 +84,7 @@ class EntropyVisualizer:
         # 将 logprobs 转换为概率
         logprobs = list(logprobs_dict.values())
         probs = [math.exp(lp) for lp in logprobs]
+        print(probs)
         
         # 归一化（因为我们只有 top-k，需要归一化）
         total_prob = sum(probs)
@@ -156,6 +157,7 @@ class EntropyVisualizer:
                                 # 计算熵
                                 entropy = self._calculate_entropy(top_lps)
                                 entropies.append(entropy)
+                                return 1, 2, 3
             
             print("\n" + "-" * 50)
             
@@ -266,7 +268,7 @@ def main():
     """主函数"""
     # 配置参数
     questions_dir = project_root / "questions"
-    problem_id = "2024-I-1"
+    problem_id = "2024-I-11"
     
     # 加载问题
     print("=" * 50)
@@ -294,6 +296,8 @@ def main():
     print("开始生成...")
     generated_text, tokens, entropies = visualizer.generate_with_entropy(problem.prompt)
     
+    return
+
     # 可视化
     if tokens and entropies:
         # 确保输出目录存在
