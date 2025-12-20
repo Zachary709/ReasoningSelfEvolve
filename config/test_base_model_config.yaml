@@ -13,9 +13,12 @@ max_new_tokens: 32768
 temperature: 0.6
 top_p: 0.95
 
+# logprobs 配置
+top_logprobs: 20  # 每个位置返回的 top logprobs 数量，设为 0 或 null 则不获取 logprobs
+
 # 运行模式
 dry_run: false
 
 
 # 断点重连相关配置
-resume: 12-12_23-41
+resume: 12-20_21-30

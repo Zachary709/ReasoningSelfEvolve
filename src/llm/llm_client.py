@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from openai import OpenAI
 from transformers import AutoTokenizer
@@ -132,12 +132,25 @@ class LocalLLM:
         prompt: Union[str, Sequence[Dict[str, str]]],
         stop: Optional[list[str]] = None,
         max_new_tokens_override: Optional[int] = None,
-    ) -> str:
+        return_logprobs: bool = False,
+        top_logprobs: Optional[int] = None,
+    ) -> Union[str, Dict[str, Any]]:
         if self.dry_run:
             preview_text = (
                 prompt if isinstance(prompt, str) else self._messages_to_text(prompt)
             )
-            return f"[DRY-RUN OUTPUT] Prompt preview: {preview_text[:200]}..."
+            dry_run_text = f"[DRY-RUN OUTPUT] Prompt preview: {preview_text[:200]}..."
+            if return_logprobs:
+                return {
+                    "text": dry_run_text,
+                    "logprobs": None,
+                    "usage": {
+                        "prompt_tokens": None,
+                        "completion_tokens": None,
+                        "total_tokens": None,
+                    }
+                }
+            return dry_run_text
 
         if isinstance(prompt, str):
             messages: List[Dict[str, str]] = [{"role": "system", "content": "You are a math problem solver. You are given a math problem and you need to solve it."}, {"role": "user", "content": prompt}]
@@ -190,16 +203,24 @@ class LocalLLM:
             if self.request_timeout is not None
             else self._client
         )
+        # 准备 API 调用参数
+        api_params = {
+            "model": self.model_path,
+            "messages": messages,
+            "max_tokens": effective_max_new_tokens,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "stop": stop,
+        }
+        
+        # 如果需要 logprobs，添加相关参数
+        if return_logprobs:
+            api_params["logprobs"] = True
+            if top_logprobs is not None:
+                api_params["top_logprobs"] = top_logprobs
+        
         try:
-            response = client.chat.completions.create(
-                model=self.model_path,
-                messages=messages,
-                max_tokens=effective_max_new_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                # extra_body={"enable_thinking": False},
-                stop=stop,
-            )
+            response = client.chat.completions.create(**api_params)
         except Exception as exc:
             raise RuntimeError(f"[LLM] Failed to call OpenAI client: {exc}") from exc
 
@@ -222,12 +243,56 @@ class LocalLLM:
                 f"Usage: {getattr(response, 'usage', {})}"
             )
             # Return a placeholder message instead of raising an error
-            return "[Empty response from model]"
+            empty_text = "[Empty response from model]"
+            if return_logprobs:
+                return {
+                    "text": empty_text,
+                    "logprobs": None,
+                    "usage": {
+                        "prompt_tokens": response.usage.prompt_tokens if response.usage else None,
+                        "completion_tokens": response.usage.completion_tokens if response.usage else None,
+                        "total_tokens": response.usage.total_tokens if response.usage else None,
+                    }
+                }
+            return empty_text
         
         # output usage
         usage = response.usage
         logger.info(f"[LLM] Usage: {usage}")
         # print(f"[LLM] Usage: {usage}")
+
+        # 如果需要返回 logprobs
+        if return_logprobs:
+            logprobs_data = None
+            if hasattr(choices[0], 'logprobs') and choices[0].logprobs is not None:
+                logprobs_content = choices[0].logprobs.content
+                if logprobs_content:
+                    logprobs_data = []
+                    for token_logprob in logprobs_content:
+                        token_info = {
+                            "token": token_logprob.token,
+                            "logprob": token_logprob.logprob,
+                        }
+                        # 如果有 top_logprobs
+                        if hasattr(token_logprob, 'top_logprobs') and token_logprob.top_logprobs:
+                            token_info["top_logprobs"] = [
+                                {
+                                    "token": tl.token,
+                                    "logprob": tl.logprob,
+                                }
+                                for tl in token_logprob.top_logprobs
+                            ]
+                        logprobs_data.append(token_info)
+            
+            return {
+                "text": text,
+                "logprobs": logprobs_data,
+                "usage": {
+                    "prompt_tokens": usage.prompt_tokens if usage else None,
+                    "completion_tokens": usage.completion_tokens if usage else None,
+                    "total_tokens": usage.total_tokens if usage else None,
+                }
+            }
 
         return text
 

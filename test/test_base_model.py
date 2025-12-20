@@ -233,6 +233,52 @@ def format_token_label(tokenizer: AutoTokenizer, token: str) -> str:
     return label
 
 
+def save_logprobs(
+    problem_id: str,
+    logprobs_data: Optional[List[Dict[str, Any]]],
+    project_root: Path,
+    session_id: Optional[str] = None,
+) -> Optional[Path]:
+    """
+    保存 logprobs 数据到 outputs 文件夹。
+    
+    Args:
+        problem_id: 问题 ID
+        logprobs_data: logprobs 数据列表，每个元素包含 token, logprob, 可选的 top_logprobs
+        project_root: 项目根目录
+        session_id: 会话 ID（日期格式 MM-DD_HH-MM），用于创建子文件夹
+    
+    Returns:
+        保存的文件路径，如果 logprobs_data 为 None 则返回 None
+    """
+    if logprobs_data is None:
+        print(f"    警告: 没有 logprobs 数据可保存")
+        return None
+    
+    # 创建输出目录：outputs/session_id/problem_id
+    if session_id:
+        output_dir = project_root / "outputs" / session_id / problem_id
+    else:
+        output_dir = project_root / "outputs" / problem_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 保存 logprobs.json
+    logprobs_path = output_dir / "logprobs.json"
+    
+    # 构建保存的数据结构
+    logprobs_output = {
+        "problem_id": problem_id,
+        "total_tokens": len(logprobs_data),
+        "logprobs": logprobs_data,
+    }
+    
+    with open(logprobs_path, "w", encoding="utf-8") as f:
+        json.dump(logprobs_output, f, ensure_ascii=False, indent=2)
+    
+    print(f"    Logprobs saved to: {logprobs_path}")
+    return logprobs_path
+
+
 def save_solution_and_token_stats(
     problem_id: str,
     solution_text: str,
@@ -327,6 +373,7 @@ def test_base_model(
     max_new_tokens: int = 32768,
     temperature: float = 0.6,
     top_p: float = 0.95,
+    top_logprobs: Optional[int] = 20,
     dry_run: bool = False,
     resume_session: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -341,6 +388,7 @@ def test_base_model(
         max_new_tokens: 最大生成token数
         temperature: 温度参数
         top_p: top_p参数
+        top_logprobs: 每个位置返回的 top logprobs 数量，为 0 或 None 则不获取 logprobs
         dry_run: 是否为dry run模式
         resume_session: 断点重连的会话 ID（格式为 "MM-DD_HH-MM"），为 None 则开始新会话
     
@@ -461,9 +509,27 @@ def test_base_model(
             # 构建提示
             messages = prompt_builder.solution(problem_text)
             
-            # 生成解答
+            # 生成解答（根据配置决定是否获取 logprobs）
             print("  正在生成解答...")
-            solution_text = llm.generate(messages, max_new_tokens_override=max_new_tokens)
+            return_logprobs = top_logprobs is not None and top_logprobs > 0
+            
+            if return_logprobs:
+                generation_result = llm.generate(
+                    messages, 
+                    max_new_tokens_override=max_new_tokens,
+                    return_logprobs=True,
+                    top_logprobs=top_logprobs,
+                )
+                # 解析生成结果
+                solution_text = generation_result["text"]
+                logprobs_data = generation_result.get("logprobs")
+            else:
+                # 不获取 logprobs，直接返回文本
+                solution_text = llm.generate(
+                    messages, 
+                    max_new_tokens_override=max_new_tokens,
+                )
+                logprobs_data = None
             
             # 评估答案
             print("  正在评估答案...")
@@ -486,6 +552,14 @@ def test_base_model(
                 problem_id=problem_id,
                 solution_text=solution_text,
                 tokenizer=tokenizer,
+                project_root=PROJECT_ROOT,
+                session_id=progress_tracker.session_id,
+            )
+            
+            # 保存 logprobs
+            save_logprobs(
+                problem_id=problem_id,
+                logprobs_data=logprobs_data,
                 project_root=PROJECT_ROOT,
                 session_id=progress_tracker.session_id,
             )
@@ -556,9 +630,13 @@ def main():
     max_new_tokens = config.get("max_new_tokens", 32768)
     temperature = config.get("temperature", 0.6)
     top_p = config.get("top_p", 0.95)
+    top_logprobs = config.get("top_logprobs", 5)
+    # 处理 top_logprobs 为 null/None/0 的情况
+    if top_logprobs is None or top_logprobs == 0:
+        top_logprobs = None
     dry_run = config.get("dry_run", False)
     resume_session = config.get("resume", None)
-    if resume_session is not None and resume_session.lower() == "none":
+    if resume_session is not None and str(resume_session).lower() == "none":
         resume_session = None
     
     print(f"配置参数:")
@@ -569,6 +647,7 @@ def main():
     print(f"  max_new_tokens: {max_new_tokens}")
     print(f"  temperature: {temperature}")
     print(f"  top_p: {top_p}")
+    print(f"  top_logprobs: {top_logprobs}")
     print(f"  dry_run: {dry_run}")
     print(f"  resume: {resume_session}")
     
@@ -581,6 +660,7 @@ def main():
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_p=top_p,
+        top_logprobs=top_logprobs,
         dry_run=dry_run,
         resume_session=resume_session,
     )
