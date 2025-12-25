@@ -1,0 +1,34 @@
+# test_self_evolve 配置文件
+
+# 问题相关配置
+questions_dir: /home/zhangdw/ReasoningSelfEvolve/questions
+questions_file: aime2024_questions.txt
+
+# 模型相关配置
+model: /home/zhangdw/models/Qwen/Qwen3-8B
+api_base: http://0.0.0.0:8000
+
+# 生成参数
+max_new_tokens: 20000
+max_context_length: 32768
+temperature: 0.6
+top_p: 0.95
+
+# Self-evolving 参数
+rounds: 5  # 迭代轮数
+verification_max_new_tokens: 5000
+max_report_tokens: 5000
+
+# logprobs 配置
+top_logprobs: 20  # 每个位置返回的 top logprobs 数量，设为 0 或 null 则不获取 logprobs
+
+# 运行模式
+dry_run: false
+
+# 日志配置
+log_path: /home/zhangdw/ReasoningSelfEvolve/outputs/self_evolve/latest_run.log
+
+# 断点重连相关配置
+# 设为 session_id（如 "12-20_21-30"）以恢复会话，设为 null 或注释掉则开始新会话
+# resume: 12-25_17-26
+resume: null

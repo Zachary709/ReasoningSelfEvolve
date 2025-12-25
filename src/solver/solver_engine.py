@@ -18,6 +18,8 @@ class SelfEvolvingSolver:
         max_new_tokens: int = 4096,
         verification_max_new_tokens: Optional[int] = None,
         max_report_tokens: int = 10000,
+        return_logprobs: bool = False,
+        top_logprobs: int = 20,
     ) -> None:
         self.llm = llm
         self.prompts = prompt_builder
@@ -25,6 +27,8 @@ class SelfEvolvingSolver:
         self.max_new_tokens = max_new_tokens
         self.verification_max_new_tokens = verification_max_new_tokens
         self.max_report_tokens = max_report_tokens
+        self.return_logprobs = return_logprobs
+        self.top_logprobs = top_logprobs
 
     def solve(self, record: ProblemRecord, rounds: int = 2) -> Dict[str, Any]:
         history = []
@@ -38,7 +42,19 @@ class SelfEvolvingSolver:
         self._log(self._divider("Initial Solution"))
         self._log("Generating initial solution...")
 
-        solution_text = self.llm.generate(solution_prompt, max_new_tokens_override=self.max_new_tokens + 2 * self.max_report_tokens)
+        # 生成初始解答（支持 logprobs）
+        if self.return_logprobs:
+            generation_result = self.llm.generate(
+                solution_prompt, 
+                max_new_tokens_override=self.max_new_tokens + 2 * self.max_report_tokens,
+                return_logprobs=True,
+                top_logprobs=self.top_logprobs,
+            )
+            solution_text = generation_result["text"]
+            solution_logprobs = generation_result.get("logprobs")
+        else:
+            solution_text = self.llm.generate(solution_prompt, max_new_tokens_override=self.max_new_tokens + 2 * self.max_report_tokens)
+            solution_logprobs = None
         solution_body = self._extract_report(solution_text)
         
         # solution_text, solution_body = self._generate_with_token_check(
@@ -53,6 +69,7 @@ class SelfEvolvingSolver:
                 "prompt": solution_prompt,
                 "response": solution_text,
                 "solution_body": solution_body,
+                "logprobs": solution_logprobs,
             }
         )
 
@@ -77,7 +94,20 @@ class SelfEvolvingSolver:
             max_refinement_tokens = self.max_new_tokens
             if verification_body == "":
                 max_refinement_tokens += self.max_report_tokens
-            solution_text = self.llm.generate(refinement_prompt, max_new_tokens_override=max_refinement_tokens)
+            
+            # 生成改进解答（支持 logprobs）
+            if self.return_logprobs:
+                generation_result = self.llm.generate(
+                    refinement_prompt, 
+                    max_new_tokens_override=max_refinement_tokens,
+                    return_logprobs=True,
+                    top_logprobs=self.top_logprobs,
+                )
+                solution_text = generation_result["text"]
+                solution_logprobs = generation_result.get("logprobs")
+            else:
+                solution_text = self.llm.generate(refinement_prompt, max_new_tokens_override=max_refinement_tokens)
+                solution_logprobs = None
             solution_body = self._extract_report(solution_text)
             # solution_text, solution_body = self._generate_with_token_check(
             #     refinement_prompt,
@@ -91,6 +121,7 @@ class SelfEvolvingSolver:
                     "prompt": refinement_prompt,
                     "response": solution_text,
                     "solution_body": solution_body,
+                    "logprobs": solution_logprobs,
                 }
             )
 

@@ -1,6 +1,8 @@
 """
 可视化 LLM 输出过程中每个 token 的熵变化。
-从 outputs/{session_id}/{problem_id}/logprobs.json 读取预先保存的 logprobs 数据。
+支持两种模式：
+1. base_model: 从 outputs/base_model/{session_id}/{problem_id}/logprobs.json 读取
+2. self_evolve: 从 outputs/self_evolve/{session_id}/{problem_id}/{round}/logprobs.json 读取
 """
 from __future__ import annotations
 
@@ -12,25 +14,38 @@ from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# 默认配置文件路径
+DEFAULT_CONFIG_PATH = project_root / "config" / "entropy_config.yaml"
+
 
 class EntropyVisualizer:
     """
     从预保存的 logprobs.json 文件计算并可视化每个 token 的熵。
+    支持 base_model 和 self_evolve 两种模式。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, mode: str = "base_model", outputs_dir: Optional[Path] = None) -> None:
         """
         初始化熵可视化器。
         
         Args:
-            outputs_dir: outputs 目录路径，默认为项目根目录下的 outputs/
+            mode: 运行模式，"base_model" 或 "self_evolve"
+            outputs_dir: outputs 目录路径，默认根据 mode 自动设置
         """
-        self.outputs_dir = project_root / "outputs"
+        self.mode = mode
+        if outputs_dir:
+            self.outputs_dir = outputs_dir
+        else:
+            if mode == "self_evolve":
+                self.outputs_dir = project_root / "outputs" / "self_evolve"
+            else:
+                self.outputs_dir = project_root / "outputs" / "base_model"
 
     def _calculate_entropy(self, logprobs_list: List[Dict[str, float]]) -> float:
         """
@@ -61,15 +76,14 @@ class EntropyVisualizer:
         for p in probs:
             if p > 0:
                 entropy -= p * math.log(p)
-        
-        # entropy = entropy / max(probs)
 
         return entropy
 
     def load_logprobs(
         self, 
         session_id: str, 
-        problem_id: str
+        problem_id: str,
+        round_num: Optional[int] = None,
     ) -> Tuple[List[str], List[float], List[Dict]]:
         """
         从 logprobs.json 文件加载数据并计算熵。
@@ -77,11 +91,17 @@ class EntropyVisualizer:
         Args:
             session_id: 会话 ID
             problem_id: 问题 ID
+            round_num: 轮次号（仅 self_evolve 模式需要）
         
         Returns:
             (token 列表, 熵列表, 原始 logprobs 数据)
         """
-        logprobs_path = self.outputs_dir / session_id / problem_id / "logprobs.json"
+        if self.mode == "self_evolve":
+            if round_num is None:
+                raise ValueError("self_evolve 模式需要指定 round_num")
+            logprobs_path = self.outputs_dir / session_id / problem_id / str(round_num) / "logprobs.json"
+        else:
+            logprobs_path = self.outputs_dir / session_id / problem_id / "logprobs.json"
         
         if not logprobs_path.exists():
             raise FileNotFoundError(f"logprobs 文件不存在: {logprobs_path}")
@@ -206,18 +226,6 @@ class EntropyVisualizer:
         print(f"  标准差: {np.std(entropies):.4f}")
         print("=" * 50)
         
-        # 显示高熵 token
-        # if high_entropy_indices:
-        #     print("\n高熵 token (熵 > mean + std):")
-        #     for idx in high_entropy_indices[:10]:  # 最多显示 10 个
-        #         token = tokens[idx]
-        #         entropy = entropies[idx]
-        #         # 处理特殊字符显示
-        #         display_token = repr(token) if token.strip() == '' else token
-        #         print(f"  [{idx}] {display_token}: {entropy:.4f}")
-        #     if len(high_entropy_indices) > 10:
-        #         print(f"  ... 还有 {len(high_entropy_indices) - 10} 个高熵 token")
-        
         return mean_entropy
 
     def visualize_summary(
@@ -275,43 +283,198 @@ class EntropyVisualizer:
         
         # 关闭图表，释放内存
         plt.close(fig)
+
+    def visualize_rounds_comparison(
+        self,
+        session_id: str,
+        problem_id: str,
+        rounds: List[int],
+        save_path: str,
+    ) -> None:
+        """
+        可视化同一问题不同轮次的熵对比（仅 self_evolve 模式）。
         
-        # 打印统计信息
-        # print("\n" + "=" * 50)
-        # print("汇总统计信息:")
-        # print(f"  问题数量: {len(problem_ids)}")
-        # print(f"  总体平均熵: {overall_mean:.4f} nats")
-        # print(f"  最高平均熵: {np.max(mean_entropies):.4f} nats ({problem_ids[np.argmax(mean_entropies)]})")
-        # print(f"  最低平均熵: {np.min(mean_entropies):.4f} nats ({problem_ids[np.argmin(mean_entropies)]})")
-        # print(f"  标准差: {np.std(mean_entropies):.4f}")
-        # print("=" * 50)
+        Args:
+            session_id: 会话 ID
+            problem_id: 问题 ID
+            rounds: 轮次列表
+            save_path: 保存路径
+        """
+        if self.mode != "self_evolve":
+            print("rounds_comparison 仅支持 self_evolve 模式")
+            return
+        
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        mean_entropies = []
+        valid_rounds = []
+        
+        for round_num in rounds:
+            try:
+                tokens, entropies, _ = self.load_logprobs(session_id, problem_id, round_num)
+                if entropies:
+                    mean_entropies.append(np.mean(entropies))
+                    valid_rounds.append(round_num)
+            except FileNotFoundError:
+                continue
+        
+        if not valid_rounds:
+            print(f"没有找到任何轮次的 logprobs 数据: {problem_id}")
+            return
+        
+        x = np.arange(len(valid_rounds))
+        bars = ax.bar(x, mean_entropies, color='steelblue', alpha=0.8, edgecolor='navy')
+        
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'Round {r}' for r in valid_rounds])
+        ax.set_xlabel('Round', fontsize=12)
+        ax.set_ylabel('Mean Entropy (nats)', fontsize=12)
+        ax.set_title(f'Mean Entropy by Round - Problem {problem_id}', fontsize=14)
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        for bar, entropy in zip(bars, mean_entropies):
+            height = bar.get_height()
+            ax.annotate(f'{entropy:.3f}',
+                       xy=(bar.get_x() + bar.get_width() / 2, height),
+                       xytext=(0, 3),
+                       textcoords="offset points",
+                       ha='center', va='bottom', fontsize=10)
+        
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"轮次对比图已保存到: {save_path}")
+        plt.close(fig)
+
+
+def detect_mode(input_path: str) -> str:
+    """
+    根据输入路径自动检测模式。
+    
+    Args:
+        input_path: 输入路径字符串
+    
+    Returns:
+        "base_model" 或 "self_evolve"
+    """
+    if "self_evolve" in input_path:
+        return "self_evolve"
+    elif "base_model" in input_path:
+        return "base_model"
+    else:
+        # 默认为 base_model
+        return "base_model"
+
+
+def get_available_rounds(session_dir: Path, problem_id: str) -> List[int]:
+    """
+    获取某个问题下所有可用的轮次。
+    
+    Args:
+        session_dir: 会话目录
+        problem_id: 问题 ID
+    
+    Returns:
+        轮次列表（已排序）
+    """
+    problem_dir = session_dir / problem_id
+    if not problem_dir.exists():
+        return []
+    
+    rounds = []
+    for item in problem_dir.iterdir():
+        if item.is_dir() and item.name.isdigit():
+            rounds.append(int(item.name))
+    
+    return sorted(rounds)
+
+
+def load_config(config_path: Optional[Path] = None) -> dict:
+    """
+    从 YAML 配置文件加载配置。
+    
+    Args:
+        config_path: 配置文件路径
+    
+    Returns:
+        配置字典
+    """
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+    
+    if not config_path.exists():
+        # 返回默认配置
+        return {
+            "input_path": str(project_root / "outputs" / "base_model"),
+            "session_id": None,
+            "skip_last_tokens": 1000,
+        }
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    
+    return config
 
 
 def main():
     """主函数：遍历 session 下所有 problem 并生成熵可视化"""
-    # 使用默认配置
-    session_id = "12-20_21-30"
+    # 加载配置
+    config = load_config()
+    
+    # 获取输入路径并自动检测模式
+    input_path = config.get("input_path", str(project_root / "outputs" / "base_model"))
+    mode = detect_mode(input_path)
+    session_id = config.get("session_id")
+    skip_last_tokens = config.get("skip_last_tokens", 1000)
     
     print("=" * 50)
     print(f"熵可视化分析")
+    print(f"  模式: {mode}")
+    print(f"  输入路径: {input_path}")
     print(f"  Session ID: {session_id}")
+    print(f"  跳过最后 token 数: {skip_last_tokens}")
     print("=" * 50)
     print()
     
+    # 设置输出目录
+    if mode == "self_evolve":
+        outputs_dir = project_root / "outputs" / "self_evolve"
+    else:
+        outputs_dir = project_root / "outputs" / "base_model"
+    
+    # 如果没有指定 session_id，使用输入路径中的
+    if session_id is None:
+        # 尝试从输入路径解析 session_id
+        input_path_obj = Path(input_path)
+        if input_path_obj.exists() and input_path_obj.is_dir():
+            # 假设输入路径格式为 .../outputs/{mode}/{session_id}
+            session_id = input_path_obj.name
+        else:
+            # 获取最新的 session
+            session_dirs = [d for d in outputs_dir.iterdir() if d.is_dir()]
+            if session_dirs:
+                session_dirs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+                session_id = session_dirs[0].name
+            else:
+                print(f"错误: 没有找到任何 session 目录: {outputs_dir}")
+                return
+    
+    print(f"使用 Session ID: {session_id}")
+    
     # 创建熵可视化器
-    visualizer = EntropyVisualizer()
+    visualizer = EntropyVisualizer(mode=mode, outputs_dir=outputs_dir)
     
     # 获取 session 目录
-    session_dir = visualizer.outputs_dir / session_id
+    session_dir = outputs_dir / session_id
     if not session_dir.exists():
         print(f"错误: session 目录不存在: {session_dir}")
-        print(f"请确保已运行 test_base_model.py 生成 logprobs 数据")
+        print(f"请确保已运行相应的测试脚本生成 logprobs 数据")
         return
     
     # 遍历 session 目录下所有子文件夹（每个子文件夹是一个 problem）
     problem_dirs = [d for d in session_dir.iterdir() if d.is_dir()]
-    # 按 problem_id 排序：先按中间部分（如 I, II），再按最后的数字
-    # 例如 2024-I-1, 2024-I-2, ..., 2024-I-15, 2024-II-1, ...
+    # 过滤掉非问题目录（如可能存在的其他文件夹）
+    problem_dirs = [d for d in problem_dirs if "-" in d.name]
+    # 按 problem_id 排序
     problem_dirs.sort(key=lambda d: (d.name.split("-")[1], int(d.name.split("-")[-1])))
     
     if not problem_dirs:
@@ -330,67 +493,146 @@ def main():
     problem_ids_for_summary: List[str] = []
     mean_entropies_for_summary: List[float] = []
     
-    for problem_dir in problem_dirs:
-        problem_id = problem_dir.name
-        logprobs_file = problem_dir / "logprobs.json"
-        
-        # 检查是否存在 logprobs.json
-        if not logprobs_file.exists():
-            print(f"[跳过] {problem_id}: 没有 logprobs.json 文件")
-            skip_count += 1
-            continue
-        
-        print(f"\n{'=' * 50}")
-        print(f"处理 Problem: {problem_id}")
-        print("=" * 50)
-        
-        try:
-            # 加载 logprobs 并计算熵
-            tokens, entropies, raw_data = visualizer.load_logprobs(
-                session_id=session_id,
-                problem_id=problem_id,
-            )
+    if mode == "self_evolve":
+        # Self-evolve 模式：遍历每个问题的每个轮次
+        for problem_dir in problem_dirs:
+            problem_id = problem_dir.name
             
-            tokens = tokens[:-1000]
-            entropies = entropies[:-1000]
-
-            # 可视化
-            if tokens and entropies:
-                save_path = str(problem_dir / f"entropy_{problem_id.replace('-', '_')}.png")
-                
-                mean_entropy = visualizer.visualize_entropy(
-                    tokens=tokens,
-                    entropies=entropies,
-                    title=f"Token Entropy - Problem {problem_id}",
-                    save_path=save_path,
-                )
-                success_count += 1
-                
-                # 收集平均熵用于汇总图
-                if mean_entropy is not None:
-                    problem_ids_for_summary.append(problem_id)
-                    mean_entropies_for_summary.append(mean_entropy)
-            else:
-                print(f"[警告] {problem_id}: 没有有效的 logprobs 数据")
+            # 获取该问题的所有可用轮次
+            available_rounds = get_available_rounds(session_dir, problem_id)
+            
+            if not available_rounds:
+                print(f"[跳过] {problem_id}: 没有找到任何轮次")
                 skip_count += 1
+                continue
+            
+            print(f"\n{'=' * 50}")
+            print(f"处理 Problem: {problem_id} (轮次: {available_rounds})")
+            print("=" * 50)
+            
+            # 收集每轮的平均熵用于对比
+            round_mean_entropies = []
+            
+            for round_num in available_rounds:
+                round_dir = problem_dir / str(round_num)
+                logprobs_file = round_dir / "logprobs.json"
                 
-        except Exception as e:
-            print(f"[错误] {problem_id}: {e}")
-            error_count += 1
+                if not logprobs_file.exists():
+                    print(f"  [跳过] Round {round_num}: 没有 logprobs.json 文件")
+                    continue
+                
+                print(f"\n  处理 Round {round_num}")
+                
+                try:
+                    tokens, entropies, raw_data = visualizer.load_logprobs(
+                        session_id=session_id,
+                        problem_id=problem_id,
+                        round_num=round_num,
+                    )
+                    
+                    # 跳过最后的 token
+                    if skip_last_tokens > 0 and len(tokens) > skip_last_tokens:
+                        tokens = tokens[:-skip_last_tokens]
+                        entropies = entropies[:-skip_last_tokens]
+                    
+                    if tokens and entropies:
+                        save_path = str(round_dir / f"entropy_{problem_id.replace('-', '_')}_round{round_num}.png")
+                        
+                        mean_entropy = visualizer.visualize_entropy(
+                            tokens=tokens,
+                            entropies=entropies,
+                            title=f"Token Entropy - Problem {problem_id} Round {round_num}",
+                            save_path=save_path,
+                        )
+                        success_count += 1
+                        
+                        if mean_entropy is not None:
+                            round_mean_entropies.append(mean_entropy)
+                    else:
+                        print(f"  [警告] Round {round_num}: 没有有效的 logprobs 数据")
+                        skip_count += 1
+                        
+                except Exception as e:
+                    print(f"  [错误] Round {round_num}: {e}")
+                    error_count += 1
+            
+            # 如果有多个轮次，生成轮次对比图
+            if len(round_mean_entropies) > 1:
+                comparison_save_path = str(problem_dir / f"entropy_rounds_comparison_{problem_id.replace('-', '_')}.png")
+                visualizer.visualize_rounds_comparison(
+                    session_id=session_id,
+                    problem_id=problem_id,
+                    rounds=available_rounds,
+                    save_path=comparison_save_path,
+                )
+            
+            # 使用最后一轮的平均熵作为该问题的代表
+            if round_mean_entropies:
+                problem_ids_for_summary.append(problem_id)
+                mean_entropies_for_summary.append(round_mean_entropies[-1])
+    
+    else:
+        # Base model 模式：直接遍历每个问题
+        for problem_dir in problem_dirs:
+            problem_id = problem_dir.name
+            logprobs_file = problem_dir / "logprobs.json"
+            
+            if not logprobs_file.exists():
+                print(f"[跳过] {problem_id}: 没有 logprobs.json 文件")
+                skip_count += 1
+                continue
+            
+            print(f"\n{'=' * 50}")
+            print(f"处理 Problem: {problem_id}")
+            print("=" * 50)
+            
+            try:
+                tokens, entropies, raw_data = visualizer.load_logprobs(
+                    session_id=session_id,
+                    problem_id=problem_id,
+                )
+                
+                # 跳过最后的 token
+                if skip_last_tokens > 0 and len(tokens) > skip_last_tokens:
+                    tokens = tokens[:-skip_last_tokens]
+                    entropies = entropies[:-skip_last_tokens]
+
+                if tokens and entropies:
+                    save_path = str(problem_dir / f"entropy_{problem_id.replace('-', '_')}.png")
+                    
+                    mean_entropy = visualizer.visualize_entropy(
+                        tokens=tokens,
+                        entropies=entropies,
+                        title=f"Token Entropy - Problem {problem_id}",
+                        save_path=save_path,
+                    )
+                    success_count += 1
+                    
+                    if mean_entropy is not None:
+                        problem_ids_for_summary.append(problem_id)
+                        mean_entropies_for_summary.append(mean_entropy)
+                else:
+                    print(f"[警告] {problem_id}: 没有有效的 logprobs 数据")
+                    skip_count += 1
+                    
+            except Exception as e:
+                print(f"[错误] {problem_id}: {e}")
+                error_count += 1
     
     # 绘制汇总图
     if problem_ids_for_summary and mean_entropies_for_summary:
-        summary_save_path = str(session_dir / "entropy_summary.png")
+        summary_save_path = str(session_dir / f"entropy_summary_{mode}.png")
         visualizer.visualize_summary(
             problem_ids=problem_ids_for_summary,
             mean_entropies=mean_entropies_for_summary,
             save_path=summary_save_path,
-            title=f"Mean Entropy by Problem - Session {session_id}",
+            title=f"Mean Entropy by Problem - Session {session_id} ({mode})",
         )
     
     # 打印总结
     print("\n" + "=" * 50)
     print("处理完成!")
+    print(f"  模式: {mode}")
     print(f"  成功: {success_count}")
     print(f"  跳过: {skip_count}")
     print(f"  错误: {error_count}")
