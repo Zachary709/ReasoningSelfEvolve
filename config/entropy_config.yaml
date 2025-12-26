@@ -12,4 +12,4 @@ input_path: /home/zhangdw/ReasoningSelfEvolve/outputs/self_evolve
 session_id: 12-25_17-26
 
 # 跳过最后的 token 数（用于忽略输出末尾的噪声）
-skip_last_tokens: 1000
+skip_last_tokens: 0

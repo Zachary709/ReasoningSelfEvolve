@@ -168,12 +168,42 @@ class ProgressTracker:
                 self.completed_problems = set()
                 self.results = {}
     
+    def _sort_problem_ids(self, problem_ids: List[str]) -> List[str]:
+        """
+        对题目 ID 进行排序。
+        题目 ID 格式为 "2024-I-1"、"2024-II-15" 等，按年份、卷号（I 在 II 之前）、题号排序。
+        """
+        def sort_key(problem_id: str):
+            parts = problem_id.split("-")
+            if len(parts) >= 3:
+                year = parts[0]
+                volume = 0 if parts[1] == "I" else 1  # I 在 II 之前
+                try:
+                    num = int(parts[2])
+                except ValueError:
+                    num = 0
+                return (year, volume, num)
+            return (problem_id, 0, 0)
+        
+        return sorted(problem_ids, key=sort_key)
+    
     def _save_progress(self):
         """保存进度到文件"""
+        # 生成 correctness 字典：每个题目的答案正确性
+        correctness = {}
+        for problem_id, problem_data in self.results.items():
+            correctness[problem_id] = problem_data.get("correct")
+        
+        # 对 completed_problems 和 results 进行排序
+        sorted_completed = self._sort_problem_ids(list(self.completed_problems))
+        sorted_correctness = {k: correctness[k] for k in self._sort_problem_ids(list(correctness.keys()))}
+        sorted_results = {k: self.results[k] for k in self._sort_problem_ids(list(self.results.keys()))}
+        
         data = {
             "session_id": self.session_id,
-            "completed_problems": list(self.completed_problems),
-            "results": self.results,
+            "completed_problems": sorted_completed,
+            "correctness": sorted_correctness,
+            "results": sorted_results,
             "last_update": datetime.now().isoformat(),
         }
         with open(self.progress_file, "w", encoding="utf-8") as f:

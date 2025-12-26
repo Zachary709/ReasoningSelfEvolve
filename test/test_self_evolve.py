@@ -191,13 +191,52 @@ class ProgressTracker:
                 self.problem_rounds = {}
                 self.results = {}
     
+    def _sort_problem_ids(self, problem_ids: List[str]) -> List[str]:
+        """
+        对题目 ID 进行排序。
+        题目 ID 格式为 "2024-I-1"、"2024-II-15" 等，按年份、卷号（I 在 II 之前）、题号排序。
+        """
+        def sort_key(problem_id: str):
+            parts = problem_id.split("-")
+            if len(parts) >= 3:
+                year = parts[0]
+                volume = 0 if parts[1] == "I" else 1  # I 在 II 之前
+                try:
+                    num = int(parts[2])
+                except ValueError:
+                    num = 0
+                return (year, volume, num)
+            return (problem_id, 0, 0)
+        
+        return sorted(problem_ids, key=sort_key)
+    
     def _save_progress(self):
         """保存进度到文件"""
+        # 生成 correctness 字典：每个题目的每个 round 的答案正确性
+        correctness = {}
+        for problem_id, problem_data in self.results.items():
+            problem_correctness = {}
+            # 添加每个 round 的正确性
+            if "rounds" in problem_data:
+                for round_num, round_data in problem_data["rounds"].items():
+                    problem_correctness[f"round_{round_num}"] = round_data.get("correct")
+            # 添加最终结果的正确性
+            if "final" in problem_data:
+                problem_correctness["final"] = problem_data["final"].get("correct")
+            correctness[problem_id] = problem_correctness
+        
+        # 对 completed_problems 和 problem_rounds 进行排序
+        sorted_completed = self._sort_problem_ids(list(self.completed_problems))
+        sorted_problem_rounds = {k: self.problem_rounds[k] for k in self._sort_problem_ids(list(self.problem_rounds.keys()))}
+        sorted_correctness = {k: correctness[k] for k in self._sort_problem_ids(list(correctness.keys()))}
+        sorted_results = {k: self.results[k] for k in self._sort_problem_ids(list(self.results.keys()))}
+        
         data = {
             "session_id": self.session_id,
-            "completed_problems": list(self.completed_problems),
-            "problem_rounds": self.problem_rounds,
-            "results": self.results,
+            "completed_problems": sorted_completed,
+            "problem_rounds": sorted_problem_rounds,
+            "correctness": sorted_correctness,
+            "results": sorted_results,
             "last_update": datetime.now().isoformat(),
         }
         with open(self.progress_file, "w", encoding="utf-8") as f:
@@ -459,6 +498,7 @@ def test_self_evolving_solver(
     dry_run: bool = False,
     log_path: Optional[Path] = None,
     resume_session: Optional[str] = None,
+    selected_problems: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     测试 self-evolving solver 在问题集上的表现。
@@ -479,6 +519,7 @@ def test_self_evolving_solver(
         dry_run: 是否为dry run模式
         log_path: 日志文件路径（可选）
         resume_session: 断点重连的会话 ID
+        selected_problems: 指定要解决的题目 ID 列表，为 None 则解决所有题目
     
     Returns:
         包含测试结果的字典
@@ -505,9 +546,48 @@ def test_self_evolving_solver(
     # 加载问题
     print(f"正在从 {questions_dir} 加载问题文件: {questions_file}")
     output_manager.writeln(f"正在从 {questions_dir} 加载问题文件: {questions_file}")
-    problems = load_all_problems(questions_dir, questions_file)
-    print(f"共加载 {len(problems)} 个问题")
-    output_manager.writeln(f"共加载 {len(problems)} 个问题")
+    all_problems = load_all_problems(questions_dir, questions_file)
+    print(f"共加载 {len(all_problems)} 个问题")
+    output_manager.writeln(f"共加载 {len(all_problems)} 个问题")
+    
+    # 根据 selected_problems 过滤问题
+    if selected_problems is not None and len(selected_problems) > 0:
+        selected_set = set(selected_problems)
+        problems = [p for p in all_problems if p.problem_id in selected_set]
+        # 检查是否有无效的问题 ID
+        found_ids = {p.problem_id for p in problems}
+        invalid_ids = selected_set - found_ids
+        if invalid_ids:
+            print(f"警告: 以下指定的问题 ID 未找到: {invalid_ids}")
+            output_manager.writeln(f"警告: 以下指定的问题 ID 未找到: {invalid_ids}")
+        print(f"已选择 {len(problems)} 个问题: {[p.problem_id for p in problems]}")
+        output_manager.writeln(f"已选择 {len(problems)} 个问题: {[p.problem_id for p in problems]}")
+        
+        # 强制重新运行指定的题目：清除这些题目的进度记录和输出文件
+        cleared_problems = []
+        for problem_id in found_ids:
+            if progress_tracker.is_completed(problem_id) or problem_id in progress_tracker.problem_rounds:
+                cleared_problems.append(problem_id)
+                # 从进度记录中移除
+                progress_tracker.completed_problems.discard(problem_id)
+                progress_tracker.problem_rounds.pop(problem_id, None)
+                progress_tracker.results.pop(problem_id, None)
+                # 删除对应的输出目录
+                problem_output_dir = progress_tracker.session_dir / problem_id
+                if problem_output_dir.exists():
+                    import shutil
+                    shutil.rmtree(problem_output_dir)
+                    print(f"  已删除输出目录: {problem_output_dir}")
+        
+        if cleared_problems:
+            # 保存更新后的进度
+            progress_tracker._save_progress()
+            print(f"已清除 {len(cleared_problems)} 个指定题目的历史记录，将重新运行: {cleared_problems}")
+            output_manager.writeln(f"已清除 {len(cleared_problems)} 个指定题目的历史记录，将重新运行: {cleared_problems}")
+    else:
+        problems = all_problems
+        print(f"将解决所有 {len(problems)} 个问题")
+        output_manager.writeln(f"将解决所有 {len(problems)} 个问题")
     
     # 初始化模型
     print(f"\n初始化模型: {model_path}")
@@ -786,6 +866,10 @@ def main():
     resume_session = config.get("resume", None)
     if resume_session is not None and str(resume_session).lower() == "none":
         resume_session = None
+    selected_problems = config.get("selected_problems", None)
+    # 处理 selected_problems 为 null/None 或空列表的情况
+    if selected_problems is None or (isinstance(selected_problems, list) and len(selected_problems) == 0):
+        selected_problems = None
     
     print(f"配置参数:")
     print(f"  questions_dir: {questions_dir}")
@@ -803,6 +887,7 @@ def main():
     print(f"  dry_run: {dry_run}")
     print(f"  log_path: {log_path}")
     print(f"  resume: {resume_session}")
+    print(f"  selected_problems: {selected_problems}")
     
     # 运行测试
     results = test_self_evolving_solver(
@@ -821,6 +906,7 @@ def main():
         dry_run=dry_run,
         log_path=log_path,
         resume_session=resume_session,
+        selected_problems=selected_problems,
     )
     
     # 输出会话 ID

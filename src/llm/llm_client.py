@@ -196,8 +196,6 @@ class LocalLLM:
                 f"limiting response to {effective_max_new_tokens} tokens"
             )
 
-        
-
         client = (
             self._client.with_options(timeout=self.request_timeout)
             if self.request_timeout is not None
