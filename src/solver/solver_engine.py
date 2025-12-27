@@ -46,14 +46,14 @@ class SelfEvolvingSolver:
         if self.return_logprobs:
             generation_result = self.llm.generate(
                 solution_prompt, 
-                max_new_tokens_override=self.max_new_tokens + 2 * self.max_report_tokens,
+                max_new_tokens_override=self.max_new_tokens + self.max_report_tokens,
                 return_logprobs=True,
                 top_logprobs=self.top_logprobs,
             )
             solution_text = generation_result["text"]
             solution_logprobs = generation_result.get("logprobs")
         else:
-            solution_text = self.llm.generate(solution_prompt, max_new_tokens_override=self.max_new_tokens + 2 * self.max_report_tokens)
+            solution_text = self.llm.generate(solution_prompt, max_new_tokens_override=self.max_new_tokens + self.max_report_tokens)
             solution_logprobs = None
         solution_body = self._extract_report(solution_text)
         
@@ -72,6 +72,20 @@ class SelfEvolvingSolver:
                 "logprobs": solution_logprobs,
             }
         )
+
+        # 总结初始解答
+        self._log(self._divider("Summarizing Initial Solution"))
+        summarized_solution = self._summarize_solution(record.prompt, solution_body)
+        self._log("Summarized solution:\n%s", summarized_solution)
+        history.append(
+            {
+                "role": "summary",
+                "original_solution_body": solution_body,
+                "summarized_solution": summarized_solution,
+            }
+        )
+        # 后续使用总结后的解答
+        solution_body = summarized_solution
 
         verification_body = ""
         verification_text = ""
@@ -95,7 +109,6 @@ class SelfEvolvingSolver:
             if verification_body == "":
                 max_refinement_tokens += self.max_report_tokens
             
-            # 生成改进解答（支持 logprobs）
             if self.return_logprobs:
                 generation_result = self.llm.generate(
                     refinement_prompt, 
@@ -124,6 +137,20 @@ class SelfEvolvingSolver:
                     "logprobs": solution_logprobs,
                 }
             )
+
+            # 总结 refinement 后的解答
+            self._log(self._divider(f"Summarizing Solution {epoch_label}"))
+            summarized_solution = self._summarize_solution(record.prompt, solution_body)
+            self._log("Summarized solution:\n%s", summarized_solution)
+            history.append(
+                {
+                    "role": f"summary_round_{round_idx}",
+                    "original_solution_body": solution_body,
+                    "summarized_solution": summarized_solution,
+                }
+            )
+            # 后续使用总结后的解答
+            solution_body = summarized_solution
 
             if round_idx == rounds:
                 break
@@ -226,6 +253,25 @@ class SelfEvolvingSolver:
         if end_idx != -1:
             return text[end_idx + len("</think>"):].strip()
         return text
+
+    def _summarize_solution(self, problem: str, solution_body: str) -> str:
+        """
+        对解答进行总结，压缩长度，保留核心内容。
+        
+        Args:
+            problem: 问题描述
+            solution_body: 原始解答内容
+            
+        Returns:
+            总结后的解答内容
+        """
+        summarize_prompt = self.prompts.summarize(problem, solution_body)
+        summarize_text = self.llm.generate(
+            summarize_prompt, 
+            max_new_tokens_override=self.max_report_tokens
+        )
+        summarized_body = self._extract_report(summarize_text)
+        return summarized_body
 
     def _log(self, message: str, *args: Any) -> None:
         if self.logger:

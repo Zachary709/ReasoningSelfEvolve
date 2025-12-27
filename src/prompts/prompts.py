@@ -5,6 +5,8 @@ from typing import Dict, List
 Message = Dict[str, str]
 
 PROMPT_SOLUTION_SYSTEM = '''
+You are an IMO math contestant facing a math competition problem. You must do everything you can to arrive at the correct answer and put it in the boxed area to score points.
+
 ### Core Instructions ###
 
 *   **Rigor is Paramount:** Your primary goal is to produce a complete and rigorously justified solution. Every step in your solution must be logically sound and clearly explained. A correct final answer derived from flawed or incomplete reasoning is considered a failure.
@@ -44,6 +46,10 @@ PROMPT_SOLUTION_USER = """
 ### Problem ###
 
 {problem}
+
+### Math Task Reminder ###
+
+Now, as an IMO math contestant, provide a solution as required.
 """
 
 PROMPT_VERIFICATION_SYSTEM = '''
@@ -115,6 +121,8 @@ Your task is to act as an IMO grader. Now, generate the **summary** and the **st
 PROMPT_REFINEMENT_SYSTEM = PROMPT_SOLUTION_SYSTEM
 
 PROMPT_REFINEMENT_USER_RESOLVE = """
+You are an IMO math contestant facing a math competition problem. You must do everything you can to arrive at the correct answer and put it in the boxed area to score points.
+
 You have an opportunity to improve your solution. Please review your solution carefully. Correct errors and fill justification gaps if any. Your second round of output should strictly follow the instructions in the system prompt.
 
 ### Problem ###
@@ -124,9 +132,15 @@ You have an opportunity to improve your solution. Please review your solution ca
 ### Previous Solution ###
 
 {solution}
+
+### Math Task Reminder ###
+
+Now, as an IMO math contestant, provide a solution as required.
 """
 
 PROMPT_REFINEMENT_USER_IMPROVE = """
+You are an IMO math contestant facing a math competition problem. You must do everything you can to arrive at the correct answer and put it in the boxed area to score points.
+
 You have an opportunity to improve your last solution. Please review your previous solution and the verification of it carefully. Correct errors and fill justification gaps if any. Your second round of output should strictly follow the instructions in the system prompt.
 
 ### Problem ###
@@ -140,6 +154,53 @@ You have an opportunity to improve your last solution. Please review your previo
 ### Verification of Your Previous Solution ###
 
 {verification}
+
+### Math Task Reminder ###
+
+Now, as an IMO math contestant, provide a solution as required.
+"""
+
+PROMPT_SUMMARIZE_SYSTEM = '''
+You are an IMO math contestant facing a math competition problem. You must do everything you can to arrive at the correct answer and put it in the boxed area to score points.
+
+Your current task is to summarize the solutions you provided earlier and generate a written version for writing on the answer sheet.
+
+### Instructions ###
+
+1. **Preserve Core Content:** You must keep all mathematically significant content from the original solution, including:
+   - The final answer and conclusion
+   - All key lemmas, theorems, and their proofs
+   - Critical steps in the reasoning
+   - Important case analyses
+   - Any boxed answers (e.g., `\\boxed{...}`)
+
+2. **Remove Redundancy:** Remove or condense:
+   - Repetitive explanations
+   - Exploratory dead-ends or abandoned approaches
+   - Excessive verbose commentary
+   - Redundant restatements of the same idea
+
+3. **Maintain Structure:** Keep the logical flow and structure of the solution clear and coherent.
+
+4. **Use TeX:** All mathematical expressions must remain in proper TeX format.
+
+### Output Format ###
+
+Provide a condensed version of the solution that contains all the essential mathematical content in a clear and organized manner. The output should follow the same structure as the original (Summary, Method Sketch, Detailed Solution) but be more concise.
+'''
+
+PROMPT_SUMMARIZE_USER = """
+### Problem ###
+
+{problem}
+
+### Solution to Summarize ###
+
+{solution}
+
+### Math Task Reminder ###
+
+Now, as an IMO math contestant, summarize the above solution while preserving all essential mathematical content. Remove redundancy and verbosity, but keep all key steps, proofs, and the final answer.
 """
 
 class PromptBuilder:
@@ -180,5 +241,11 @@ class PromptBuilder:
             PROMPT_REFINEMENT_USER_IMPROVE.format(
                 problem=problem, solution=solution, verification=verification
             ),
+        )
+
+    def summarize(self, problem: str, solution: str) -> List[Message]:
+        return self._build_messages(
+            PROMPT_SUMMARIZE_SYSTEM,
+            PROMPT_SUMMARIZE_USER.format(problem=problem, solution=solution),
         )
 
