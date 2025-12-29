@@ -29,7 +29,7 @@ dry_run: false
 # 设为题目 ID 列表（如 ["2024-I-1", "2024-I-2"]）以只解决指定题目
 # 设为 null 或注释掉则解决所有题目
 selected_problems:
-  - "2024-I-15"
+  - "2024-I-14"
 
 # 日志配置
 log_path: /home/zhangdw/ReasoningSelfEvolve/outputs/self_evolve/latest_run.log

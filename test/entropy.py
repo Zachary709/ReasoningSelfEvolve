@@ -517,6 +517,13 @@ def main():
                 round_dir = problem_dir / str(round_num)
                 logprobs_file = round_dir / "logprobs.json"
                 
+                # 检查熵图是否已存在，如果存在则跳过
+                entropy_png_path = round_dir / f"entropy_{problem_id.replace('-', '_')}_round{round_num}.png"
+                if entropy_png_path.exists():
+                    print(f"  [跳过] Round {round_num}: 熵图已存在 ({entropy_png_path.name})")
+                    skip_count += 1
+                    continue
+                
                 if not logprobs_file.exists():
                     print(f"  [跳过] Round {round_num}: 没有 logprobs.json 文件")
                     continue
@@ -575,6 +582,14 @@ def main():
         # Base model 模式：直接遍历每个问题
         for problem_dir in problem_dirs:
             problem_id = problem_dir.name
+            
+            # 检查熵图是否已存在，如果存在则跳过
+            entropy_png_path = problem_dir / f"entropy_{problem_id.replace('-', '_')}.png"
+            if entropy_png_path.exists():
+                print(f"[跳过] {problem_id}: 熵图已存在 ({entropy_png_path.name})")
+                skip_count += 1
+                continue
+            
             logprobs_file = problem_dir / "logprobs.json"
             
             if not logprobs_file.exists():

@@ -83,7 +83,7 @@ class SelfEvolvingSolver:
                 "original_solution_body": solution_body,
                 "summarized_solution": summarized_solution,
             }
-        )
+        )   
         # 后续使用总结后的解答
         solution_body = summarized_solution
 
