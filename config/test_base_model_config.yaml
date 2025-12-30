@@ -5,7 +5,7 @@ questions_dir: /home/zhangdw/ReasoningSelfEvolve/questions
 questions_file: aime2024_questions.txt
 
 # 模型相关配置
-model: /home/zhangdw/models/Qwen/Qwen3-8B
+model: /home/data/data_zhangdw/models/Qwen/Qwen3-8B
 api_base: http://0.0.0.0:8000
 
 # 生成参数

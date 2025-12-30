@@ -8,8 +8,9 @@ input_path: /home/zhangdw/ReasoningSelfEvolve/outputs/self_evolve
 
 # 会话 ID（可选）
 # 如果为 null，则使用输入路径中的最新 session
-# session_id: 12-20_21-30
-session_id: 12-25_17-26
+# session_id: 12-25_17-26
+session_id: 12-30_17-14
+
 
 # 跳过最后的 token 数（用于忽略输出末尾的噪声）
 skip_last_tokens: 0

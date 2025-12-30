@@ -9,7 +9,7 @@ DEFAULT_CONFIG_PATH = Path("/home/zhangdw/ReasoningSelfEvolve/config/solver_conf
 DEFAULT_DATASET_PATH = Path(
     "/home/zhangdw/ReasoningSelfEvolve/questions/aime2024_questions.txt"
 )
-DEFAULT_MODEL_PATH = "/home/zhangdw/models/Qwen/Qwen3-8B"
+DEFAULT_MODEL_PATH = "/home/data/data_zhangdw/models/Qwen/Qwen3-8B"
 DEFAULT_VLLM_BASE_URL = "http://0.0.0.0:8000"
 
 
