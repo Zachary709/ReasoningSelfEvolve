@@ -32,7 +32,7 @@ log_path: /home/zhangdw/ReasoningSelfEvolve/outputs/self_evolve/latest_run.log
 # 断点重连相关配置
 # 设为 session_id（如 "12-20_21-30"）以恢复会话，设为 null 或注释掉则开始新会话
 # resume: 12-25_17-26
-# resume: 12-30_17-14
+resume: 12-30_17-14
 
 # 指定要解决的题目（可选）
 # 设为题目 ID 列表（如 ["2024-I-1", "2024-I-2"]）以只解决指定题目

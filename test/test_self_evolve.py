@@ -27,6 +27,7 @@ from src.utils.config import DEFAULT_MODEL_PATH, DEFAULT_VLLM_BASE_URL
 from src.utils.data_loader import load_problem, load_all_problems, ProblemRecord
 from src.solver.solver_engine import SelfEvolvingSolver
 from src.utils.logging_utils import configure_logging
+from src.utils.visualization import plot_round_accuracy
 
 # 默认配置文件路径
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "test_self_evolve_config.yaml"
@@ -305,6 +306,57 @@ class ProgressTracker:
             "correct": correct_count,
             "total_with_answer": total_with_answer,
         }
+
+
+def calculate_round_accuracy(correctness: Dict[str, Dict[str, Any]]) -> tuple:
+    """
+    计算每一轮的平均准确率
+    
+    Args:
+        correctness: 正确性字典，格式为 {problem_id: {round_x: bool, ...}}
+    
+    Returns:
+        (每轮准确率列表, 最大轮数)
+    """
+    # 找出每个题目的轮数和对应的正确性
+    problem_rounds = {}
+    for problem_id, rounds_data in correctness.items():
+        # 提取 round_X 的数据（排除 final）
+        round_results = {}
+        for key, value in rounds_data.items():
+            if key.startswith('round_'):
+                round_num = int(key.split('_')[1])
+                round_results[round_num] = value
+        if round_results:
+            problem_rounds[problem_id] = round_results
+    
+    if not problem_rounds:
+        return [], 0
+    
+    # 找出最大轮数
+    max_round = max(max(rounds.keys()) for rounds in problem_rounds.values())
+    
+    # 计算每一轮的平均准确率
+    round_accuracies = []
+    for round_num in range(max_round + 1):  # 从 round_0 到 round_max
+        correct_count = 0
+        total_count = len(problem_rounds)
+        
+        for problem_id, rounds_data in problem_rounds.items():
+            if round_num in rounds_data:
+                # 该题目有这一轮的数据
+                if rounds_data[round_num]:
+                    correct_count += 1
+            else:
+                # 该题目没有这一轮的数据，使用最后一轮的结果
+                last_round = max(rounds_data.keys())
+                if rounds_data[last_round]:
+                    correct_count += 1
+        
+        accuracy = correct_count / total_count
+        round_accuracies.append(accuracy)
+    
+    return round_accuracies, max_round
 
 
 def format_token_label(tokenizer: AutoTokenizer, token: str) -> str:
@@ -827,6 +879,23 @@ def test_self_evolving_solver(
     print(f"准确率: {accuracy:.2%} ({correct_count}/{total_count})")
     
     output_manager.write_summary(len(problems), total_count, correct_count, accuracy, rounds)
+    
+    # 从 progress_tracker 获取 correctness 数据并画图
+    # 重新加载进度文件以获取完整的 correctness 数据
+    if progress_tracker.progress_file.exists():
+        with open(progress_tracker.progress_file, "r", encoding="utf-8") as f:
+            progress_data = json.load(f)
+            correctness = progress_data.get("correctness", {})
+            
+            if correctness:
+                round_accuracies, max_round = calculate_round_accuracy(correctness)
+                if round_accuracies:
+                    output_path = progress_tracker.session_dir / "round_accuracy.png"
+                    plot_round_accuracy(round_accuracies, progress_tracker.session_id, str(output_path))
+                    print(f"\n每轮准确率图已保存到: {output_path}")
+                    print("每轮准确率:")
+                    for i, acc in enumerate(round_accuracies):
+                        print(f"  Round {i}: {acc:.2%}")
     
     return {
         "total_problems": len(problems),

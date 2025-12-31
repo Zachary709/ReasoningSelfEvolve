@@ -153,3 +153,58 @@ def plot_log_binned_tokens(
     
     return output_path
 
+
+def plot_round_accuracy(
+    round_accuracies: List[float],
+    session_id: str,
+    output_path: str,
+) -> str:
+    """
+    绘制准确率-轮数图
+    
+    Args:
+        round_accuracies: 每轮的准确率列表
+        session_id: 会话ID
+        output_path: 输出文件路径
+    
+    Returns:
+        保存的图片路径
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    rounds = list(range(len(round_accuracies)))
+    
+    # 绘制折线图
+    ax.plot(rounds, round_accuracies, marker='o', linewidth=2, markersize=8, 
+            color='#2E86AB', markerfacecolor='#A23B72', markeredgecolor='#2E86AB')
+    
+    # 在每个点上标注准确率值
+    for i, acc in enumerate(round_accuracies):
+        ax.annotate(f'{acc:.1%}', (i, acc), textcoords="offset points", 
+                    xytext=(0, 10), ha='center', fontsize=10)
+    
+    # 设置坐标轴
+    ax.set_xlabel('Round', fontsize=12)
+    ax.set_ylabel('Accuracy', fontsize=12)
+    ax.set_title(f'Self-Evolve Round Accuracy\n(Session: {session_id})', fontsize=14)
+    
+    # 设置 x 轴刻度
+    ax.set_xticks(rounds)
+    ax.set_xticklabels([f'Round {i}' for i in rounds])
+    
+    # 设置 y 轴范围和格式
+    ax.set_ylim(0, 1.05)
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+    
+    # 添加网格
+    ax.grid(True, linestyle='--', alpha=0.7)
+    
+    # 调整布局
+    fig.tight_layout()
+    
+    # 保存图片
+    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    
+    return output_path
+
